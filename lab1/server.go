@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -17,7 +16,6 @@ var extToContentType = map[string]string{
 }
 
 func handleConnection(conn net.Conn) {
-	fmt.Println("connected", conn)
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
@@ -58,7 +56,7 @@ func getHandler(conn net.Conn, req *http.Request) {
 		return
 	}
 
-	ext := filepath.Ext(file)
+	// ext := filepath.Ext(file)
 
 	fileContent, err := os.ReadFile(file)
 	if err != nil {
@@ -86,19 +84,22 @@ func postHandler(conn net.Conn, req *http.Request) {
 
 }
 
-// Replace with our http server impl
-// This is just to make sure devcontainer works properly
-func main() {
-	ln, err := net.Listen("tcp", ":8080")
-	//defer resp.Body.Close()
+func runServer(port string) {
+	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		// handle error
+		fmt.Println("Error starting server:", err)
 	}
+	fmt.Println("Server started")
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			// handle error
+			fmt.Println("Error accepting connection:", err)
+		} else {
+			go handleConnection(conn)
 		}
-		go handleConnection(conn)
 	}
+}
+
+func main() {
+	runServer(":8080")
 }
