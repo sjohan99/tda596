@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+const numberOfTaskWorkers = 10
+
+type Task = net.Conn
+
+var tasks = make(chan Task)
+
 var extToContentType = map[string]string{
 	".txt":  "text/plain",
 	".html": "text/html",
@@ -84,22 +90,35 @@ func postHandler(conn net.Conn, req *http.Request) {
 
 }
 
+func startWorker(tasks <-chan Task) {
+	for task := range tasks {
+		handleConnection(task)
+	}
+}
+
+func startWorkers(tasks <-chan Task) {
+	for range numberOfTaskWorkers {
+		go startWorker(tasks)
+	}
+}
+
 func runServer(port string) {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		fmt.Println("Error starting server:", err)
 	}
-	fmt.Println("Server started")
+	startWorkers(tasks)
+	fmt.Println("Server started, listening on port", port)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Println("Error accepting connection:", err)
 		} else {
-			go handleConnection(conn)
+			tasks <- conn
 		}
 	}
 }
 
 func main() {
-	runServer(":8080")
+	runServer("8080")
 }
