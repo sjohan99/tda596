@@ -3,11 +3,9 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
-	"strings"
 )
 
 const numberOfTaskWorkers = 10
@@ -53,8 +51,8 @@ func createResponse(status int) http.Response {
 
 // handle get requests
 func getHandler(conn net.Conn, req *http.Request) {
-	file := req.URL.Query().Get("file")
-	if file == "" {
+	file_name := req.URL.Query().Get("file")
+	if file_name == "" {
 		fmt.Println("Bad req -400-")
 		// TODO: add message saying that query is missing
 		httpResponse := createResponse(http.StatusBadRequest)
@@ -64,10 +62,10 @@ func getHandler(conn net.Conn, req *http.Request) {
 
 	// ext := filepath.Ext(file)
 
-	fileContent, err := os.ReadFile(file)
+	file, err := os.Open(file_name)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("File not found:", file)
+			fmt.Println("File not found:", file_name)
 			httpResponse := createResponse(http.StatusNotFound)
 			httpResponse.Write(conn)
 			return
@@ -77,9 +75,8 @@ func getHandler(conn net.Conn, req *http.Request) {
 		httpResponse.Write(conn)
 		return
 	}
-
 	httpResponse := createResponse(http.StatusOK)
-	httpResponse.Body = io.NopCloser(strings.NewReader(string(fileContent)))
+	httpResponse.Body = file
 
 	// todo
 	httpResponse.Header.Set("Content-Type", "text/plain")
