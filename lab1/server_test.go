@@ -13,7 +13,12 @@ const textFileEndpoint = baseEndpoint + "?file=testfile.txt"
 
 // TestMain runs the server before running the tests
 func TestMain(m *testing.M) {
-	go runServer(port)
+	server := HttpServer{
+		Port:                       port,
+		ContentDir:                 "test_data",
+		NumberOfConnectionHandlers: 10,
+	}
+	go runServer(server)
 	time.Sleep(time.Millisecond * 250)
 	m.Run()
 }

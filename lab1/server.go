@@ -3,109 +3,124 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 )
 
-const numberOfTaskWorkers = 10
+type HttpServer struct {
+	Port                       string
+	ContentDir                 string
+	NumberOfConnectionHandlers int
+}
+
+const numberOfConnectionHandlers = 10
 
 type Task = net.Conn
 
-var tasks = make(chan Task)
+var logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 var extToContentType = map[string]string{
 	".txt":  "text/plain",
 	".html": "text/html",
+	".gif":  "image/gif",
+	".jpeg": "image/jpeg",
+	".jpg":  "image/jpg",
+	".css":  "text/css",
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, allowedDirectory string) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
 		fmt.Print("bad request")
 		return
 	}
+
+	// http pre processing validating file type
+	fileName, fileContentType, err := checkFileFormat(req, allowedDirectory)
+	if err != nil {
+		respondWithErrorMessage(http.StatusBadRequest, err.Error(), conn)
+	}
+
 	switch req.Method {
 	case "GET":
-		getHandler(conn, req)
+		getHandler(conn, fileName, fileContentType)
 	case "POST":
-		postHandler(conn, req)
+		postHandler(conn, req, fileName)
 	default:
-		// TODO return 501 not implemented
-		fmt.Println("Unsupported method:", req.Method)
+		respondWithStatus(http.StatusNotImplemented, conn)
 	}
 	defer conn.Close()
 }
 
-func createResponse(status int) http.Response {
-	return http.Response{
-		Status:     http.StatusText(status),
-		StatusCode: status,
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     make(http.Header),
-	}
-}
-
 // handle get requests
-func getHandler(conn net.Conn, req *http.Request) {
-	file_name := req.URL.Query().Get("file")
-	if file_name == "" {
-		fmt.Println("Bad req -400-")
-		// TODO: add message saying that query is missing
-		httpResponse := createResponse(http.StatusBadRequest)
-		httpResponse.Write(conn)
-		return
-	}
-
-	// ext := filepath.Ext(file)
-
-	file, err := os.Open(file_name)
+func getHandler(conn net.Conn, fileName string, fileContentType string) {
+	file, err := os.Open(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("File not found:", file_name)
-			httpResponse := createResponse(http.StatusNotFound)
-			httpResponse.Write(conn)
+			fmt.Println("File not found:", fileName)
+			respondWithStatus(http.StatusNotFound, conn)
 			return
 		}
 		fmt.Println("Error reading file:", err)
-		httpResponse := createResponse(http.StatusInternalServerError)
-		httpResponse.Write(conn)
+		respondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
-	httpResponse := createResponse(http.StatusOK)
-	httpResponse.Body = file
 
-	// todo
-	httpResponse.Header.Set("Content-Type", "text/plain")
+	file_stats, err := file.Stat()
+	if err != nil {
+		logger.Println("Error getting file stats:", err)
+		respondWithStatus(http.StatusInternalServerError, conn)
+	}
+	httpResponse := createResponse(http.StatusOK, fileContentType, fmt.Sprint(file_stats.Size()), file)
 	httpResponse.Write(conn)
 }
 
-func postHandler(conn net.Conn, req *http.Request) {
-
-}
-
-func startWorker(tasks <-chan Task) {
-	for task := range tasks {
-		handleConnection(task)
+func postHandler(conn net.Conn, req *http.Request, fileName string) {
+	if _, err := os.Stat(fileName); err == nil {
+		respondWithErrorMessage(http.StatusConflict, "file already exists", conn)
+		return
 	}
+
+	file, err := os.Create(fileName)
+	if err != nil {
+		logger.Println("Error creating file:", err)
+		respondWithStatus(http.StatusInternalServerError, conn)
+		return
+	}
+	defer file.Close()
+	_, err = io.Copy(file, req.Body)
+	if err != nil {
+		logger.Println("Error copying file:", err)
+		respondWithStatus(http.StatusInternalServerError, conn)
+		return
+	}
+	respondWithStatus(http.StatusCreated, conn)
 }
 
-func startWorkers(tasks <-chan Task) {
+// Starts 10 go routines on standby
+func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, allowedDirectory string) {
 	for range numberOfTaskWorkers {
-		go startWorker(tasks)
+		go func() {
+			for task := range tasks {
+				handleConnection(task, allowedDirectory)
+			}
+		}()
 	}
 }
 
-func runServer(port string) {
-	ln, err := net.Listen("tcp", ":"+port)
+func runServer(server HttpServer) {
+	createDirectoryIfNotExists(server.ContentDir)
+	var tasks = make(chan Task)
+	ln, err := net.Listen("tcp", ":"+server.Port)
 	if err != nil {
 		fmt.Println("Error starting server:", err)
 	}
-	startWorkers(tasks)
-	fmt.Println("Server started, listening on port", port)
+	startConnectionHandlers(tasks, server.NumberOfConnectionHandlers, server.ContentDir)
+	fmt.Println("Server started, listening on port", server.Port)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -117,5 +132,11 @@ func runServer(port string) {
 }
 
 func main() {
-	runServer("8080")
+	port := readPortFromArgs()
+	server := HttpServer{
+		Port:                       port,
+		ContentDir:                 "public",
+		NumberOfConnectionHandlers: numberOfConnectionHandlers,
+	}
+	runServer(server)
 }
