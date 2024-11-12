@@ -11,9 +11,14 @@ import (
 )
 
 type HttpServer struct {
-	Port                       string
-	ContentDir                 string
-	NumberOfConnectionHandlers int
+	numberOfConnectionHandlers int          // number of go routines to handle connections
+	listener                   net.Listener // listener to accept connections
+	opts                       Opts         // options for the server
+}
+
+type Opts struct {
+	ReadDirectory  string // directory in which files are allowed to be read from
+	WriteDirectory string // directory in which files are allowed to be written to
 }
 
 const numberOfConnectionHandlers = 10
@@ -31,7 +36,7 @@ var extToContentType = map[string]string{
 	".css":  "text/css",
 }
 
-func handleConnection(conn net.Conn, allowedDirectory string) {
+func handleConnection(conn net.Conn, opts Opts) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
@@ -39,17 +44,11 @@ func handleConnection(conn net.Conn, allowedDirectory string) {
 		return
 	}
 
-	// http pre processing validating file type
-	fileName, fileContentType, err := checkFileFormat(req, allowedDirectory)
-	if err != nil {
-		respondWithErrorMessage(http.StatusBadRequest, err.Error(), conn)
-	}
-
 	switch req.Method {
 	case "GET":
-		getHandler(conn, fileName, fileContentType)
+		getHandler(conn, req, opts)
 	case "POST":
-		postHandler(conn, req, fileName)
+		postHandler(conn, req, opts)
 	default:
 		respondWithStatus(http.StatusNotImplemented, conn)
 	}
@@ -57,7 +56,11 @@ func handleConnection(conn net.Conn, allowedDirectory string) {
 }
 
 // handle get requests
-func getHandler(conn net.Conn, fileName string, fileContentType string) {
+func getHandler(conn net.Conn, req *http.Request, opts Opts) {
+	fileName, fileContentType, err := checkFileFormat(req, opts.ReadDirectory)
+	if err != nil {
+		respondWithErrorMessage(http.StatusBadRequest, err.Error(), conn)
+	}
 	file, err := os.Open(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -79,7 +82,12 @@ func getHandler(conn net.Conn, fileName string, fileContentType string) {
 	httpResponse.Write(conn)
 }
 
-func postHandler(conn net.Conn, req *http.Request, fileName string) {
+func postHandler(conn net.Conn, req *http.Request, opts Opts) {
+	fileName, _, err := checkFileFormat(req, opts.WriteDirectory)
+	if err != nil {
+		respondWithErrorMessage(http.StatusBadRequest, err.Error(), conn)
+		return
+	}
 	if _, err := os.Stat(fileName); err == nil {
 		respondWithErrorMessage(http.StatusConflict, "file already exists", conn)
 		return
@@ -101,42 +109,51 @@ func postHandler(conn net.Conn, req *http.Request, fileName string) {
 	respondWithStatus(http.StatusCreated, conn)
 }
 
-// Starts 10 go routines on standby
-func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, allowedDirectory string) {
+func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, opts Opts) {
 	for range numberOfTaskWorkers {
 		go func() {
 			for task := range tasks {
-				handleConnection(task, allowedDirectory)
+				handleConnection(task, opts)
 			}
 		}()
 	}
 }
 
-func runServer(server HttpServer) {
-	createDirectoryIfNotExists(server.ContentDir)
+func (server *HttpServer) Run() {
+	createDirectoryIfNotExists(server.opts.ReadDirectory)
+	createDirectoryIfNotExists(server.opts.WriteDirectory)
 	var tasks = make(chan Task)
-	ln, err := net.Listen("tcp", ":"+server.Port)
-	if err != nil {
-		fmt.Println("Error starting server:", err)
-	}
-	startConnectionHandlers(tasks, server.NumberOfConnectionHandlers, server.ContentDir)
-	fmt.Println("Server started, listening on port", server.Port)
+	startConnectionHandlers(tasks, server.numberOfConnectionHandlers, server.opts)
+	logger.Println("Server starting, listening on", server.listener.Addr())
+
 	for {
-		conn, err := ln.Accept()
+		conn, err := server.listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
+			if isClosedConnError(err) {
+				logger.Println("Listener closed on ", server.listener.Addr())
+				return
+			}
+			fmt.Println("Listener error:", err)
 		} else {
 			tasks <- conn
 		}
 	}
 }
 
+func (s *HttpServer) Stop() {
+	s.listener.Close()
+}
+
 func main() {
 	port := readPortFromArgs()
-	server := HttpServer{
-		Port:                       port,
-		ContentDir:                 "public",
-		NumberOfConnectionHandlers: numberOfConnectionHandlers,
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		logger.Fatalf("Error listening on port %s: %v", port, err)
 	}
-	runServer(server)
+	server := HttpServer{
+		opts:                       Opts{ReadDirectory: "public", WriteDirectory: "public"},
+		listener:                   listener,
+		numberOfConnectionHandlers: numberOfConnectionHandlers,
+	}
+	server.Run()
 }

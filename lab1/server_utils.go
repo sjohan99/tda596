@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -99,4 +100,18 @@ func readPortFromArgs() string {
 		os.Exit(1)
 	}
 	return os.Args[1]
+}
+
+func isClosedConnError(err error) bool {
+	if opErr, ok := err.(*net.OpError); ok {
+		if opErr.Err.Error() == "use of closed network connection" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *HttpServer) Port() string {
+	port := s.listener.Addr().(*net.TCPAddr).Port
+	return strconv.Itoa(port)
 }
