@@ -14,6 +14,7 @@ type HttpServer struct {
 	numberOfConnectionHandlers int          // number of go routines to handle connections
 	listener                   net.Listener // listener to accept connections
 	opts                       Opts         // options for the server
+	handler                    Handler
 }
 
 type Opts struct {
@@ -25,6 +26,8 @@ const numberOfConnectionHandlers = 10
 
 type Task = net.Conn
 
+type Handler func(net.Conn, Opts)
+
 var logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 var extToContentType = map[string]string{
@@ -33,14 +36,16 @@ var extToContentType = map[string]string{
 	".gif":  "image/gif",
 	".jpeg": "image/jpeg",
 	".jpg":  "image/jpg",
+	".png":  "image/png",
 	".css":  "text/css",
+	"":      "test/html",
 }
 
 func handleConnection(conn net.Conn, opts Opts) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
-		fmt.Print("bad request")
+		respondWithStatus(http.StatusBadRequest, conn)
 		return
 	}
 
@@ -64,11 +69,11 @@ func getHandler(conn net.Conn, req *http.Request, opts Opts) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("File not found:", fileName)
+			logger.Println("File not found:", fileName)
 			respondWithStatus(http.StatusNotFound, conn)
 			return
 		}
-		fmt.Println("Error reading file:", err)
+		logger.Println("Error reading file:", err)
 		respondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
@@ -109,11 +114,11 @@ func postHandler(conn net.Conn, req *http.Request, opts Opts) {
 	respondWithStatus(http.StatusCreated, conn)
 }
 
-func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, opts Opts) {
+func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, server *HttpServer) {
 	for range numberOfTaskWorkers {
 		go func() {
 			for task := range tasks {
-				handleConnection(task, opts)
+				server.handler(task, server.opts)
 			}
 		}()
 	}
@@ -122,8 +127,9 @@ func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, opts Op
 func (server *HttpServer) Run() {
 	createDirectoryIfNotExists(server.opts.ReadDirectory)
 	createDirectoryIfNotExists(server.opts.WriteDirectory)
+
 	var tasks = make(chan Task)
-	startConnectionHandlers(tasks, server.numberOfConnectionHandlers, server.opts)
+	startConnectionHandlers(tasks, server.numberOfConnectionHandlers, server)
 	logger.Println("Server starting, listening on", server.listener.Addr())
 
 	for {
@@ -133,7 +139,7 @@ func (server *HttpServer) Run() {
 				logger.Println("Listener closed on ", server.listener.Addr())
 				return
 			}
-			fmt.Println("Listener error:", err)
+			logger.Println("Listener error:", err)
 		} else {
 			tasks <- conn
 		}
@@ -154,6 +160,7 @@ func main() {
 		opts:                       Opts{ReadDirectory: "public", WriteDirectory: "public"},
 		listener:                   listener,
 		numberOfConnectionHandlers: numberOfConnectionHandlers,
+		handler:                    handleConnection,
 	}
 	server.Run()
 }

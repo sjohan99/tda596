@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,23 +56,23 @@ func respondWithErrorMessage(status int, message string, conn net.Conn) {
 // getSecureFilePath returns the path to the file in the public directory
 // and ensures that the file is within the public directory
 func getSecureFilePath(file_name string, allowedDirectory string) string {
-	file_name = filepath.Base(file_name)
 	return filepath.Join(allowedDirectory, file_name)
 }
 
-func getFileFromQuery(req *http.Request) (string, error) {
-	file_name := req.URL.Query().Get("file")
-	if file_name == "" {
-		return "", fmt.Errorf("expected query to have key 'file'")
+func getFilePath(url *url.URL) string {
+	if url.Path == "" || url.Path == "/" {
+		return "index.html"
 	}
-	return file_name, nil
+
+	parts := strings.Split(url.Path, "/")
+	for i, part := range parts {
+		parts[i] = filepath.Base(strings.TrimSpace(part))
+	}
+	return filepath.Join(parts...)
 }
 
 func checkFileFormat(req *http.Request, allowedDirectory string) (string, string, error) {
-	fileName, err := getFileFromQuery(req)
-	if err != nil {
-		return "", "", err
-	}
+	fileName := getFilePath(req.URL)
 
 	file_ext := strings.ToLower(filepath.Ext(fileName))
 	fileContentType, ok := extToContentType[file_ext]
@@ -96,7 +97,7 @@ func createDirectoryIfNotExists(dir string) error {
 
 func readPortFromArgs() string {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: server <port>")
+		fmt.Println("Usage: http_server <port>")
 		os.Exit(1)
 	}
 	return os.Args[1]
