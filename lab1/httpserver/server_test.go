@@ -1,9 +1,10 @@
-package main
+package httpserver_test
 
 import (
 	"bytes"
 	"io"
 	"io/fs"
+	"lab1/httpserver"
 	"net"
 	"net/http"
 	"os"
@@ -17,17 +18,18 @@ import (
 
 const defaultReadDir = "test_data"
 const baseEndpoint = "http://localhost"
+const numberOfConnectionHandlers = 10
 
-func endpoint(s *HttpServer) string {
+func endpoint(s *httpserver.HttpServer) string {
 	return baseEndpoint + ":" + s.Port()
 }
 
 // Creates a new HttpServer and runs it in a goroutine
 // A random port is assigned by the OS in order to isolate tests
 // from each other
-func setupTest(t *testing.T, readDir, writeDir string, handler Handler) *HttpServer {
+func setupTest(t *testing.T, readDir, writeDir string, handler httpserver.Handler) *httpserver.HttpServer {
 	if handler == nil {
-		handler = handleConnection
+		handler = httpserver.DefaultHandler
 	}
 	if writeDir == "" {
 		writeDir = t.TempDir()
@@ -36,25 +38,15 @@ func setupTest(t *testing.T, readDir, writeDir string, handler Handler) *HttpSer
 	if err != nil {
 		t.Fatalf("Failed to create listener for test: %v", err)
 	}
-	server := HttpServer{
-		opts:                       Opts{ReadDirectory: readDir, WriteDirectory: writeDir},
-		listener:                   listener,
-		numberOfConnectionHandlers: numberOfConnectionHandlers,
-		handler:                    handler,
+	server := httpserver.HttpServer{
+		Opts:                       httpserver.Opts{ReadDirectory: readDir, WriteDirectory: writeDir},
+		Listener:                   listener,
+		NumberOfConnectionHandlers: numberOfConnectionHandlers,
+		Handler:                    handler,
 	}
 
 	go server.Run()
 	return &server
-}
-
-func TestMain(m *testing.M) {
-	for _, arg := range os.Args {
-		if arg == "quiet" {
-			logger.SetOutput(io.Discard)
-			break
-		}
-	}
-	m.Run()
 }
 
 func TestGetTextfileHasCorrectBody(t *testing.T) {
@@ -226,16 +218,14 @@ func TestDeleteMethodReturnsUnimplemented(t *testing.T) {
 func TestMaxConnections(t *testing.T) {
 	inUse := int32(0)
 
-	testHandler := func(conn net.Conn, opts Opts) {
-		defer conn.Close()
+	testHandler := func(conn net.Conn, opts httpserver.Opts) {
 		currentlyInUse := atomic.AddInt32(&inUse, 1)
 		if currentlyInUse > numberOfConnectionHandlers {
 			t.Fatalf("Expected inUse to be <= 10 but got %v", currentlyInUse)
 		}
 		time.Sleep(250 * time.Millisecond)
 		atomic.AddInt32(&inUse, -1)
-		resp := createBaseResponse(http.StatusOK)
-		resp.Write(conn)
+		httpserver.DefaultHandler(conn, opts)
 	}
 	server := setupTest(t, defaultReadDir, "", testHandler)
 	defer server.Stop()

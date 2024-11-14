@@ -1,4 +1,4 @@
-package main
+package httpserver
 
 import (
 	"bytes"
@@ -95,14 +95,6 @@ func createDirectoryIfNotExists(dir string) error {
 	return nil
 }
 
-func readPortFromArgs() string {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: http_server <port>")
-		os.Exit(1)
-	}
-	return os.Args[1]
-}
-
 func isClosedConnError(err error) bool {
 	if opErr, ok := err.(*net.OpError); ok {
 		if opErr.Err.Error() == "use of closed network connection" {
@@ -113,6 +105,6 @@ func isClosedConnError(err error) bool {
 }
 
 func (s *HttpServer) Port() string {
-	port := s.listener.Addr().(*net.TCPAddr).Port
+	port := s.Listener.Addr().(*net.TCPAddr).Port
 	return strconv.Itoa(port)
 }

@@ -1,4 +1,4 @@
-package main
+package httpserver
 
 import (
 	"bufio"
@@ -11,10 +11,10 @@ import (
 )
 
 type HttpServer struct {
-	numberOfConnectionHandlers int          // number of go routines to handle connections
-	listener                   net.Listener // listener to accept connections
-	opts                       Opts         // options for the server
-	handler                    Handler
+	NumberOfConnectionHandlers int          // number of go routines to handle connections
+	Listener                   net.Listener // listener to accept connections
+	Opts                       Opts         // options for the server
+	Handler                    Handler
 }
 
 type Opts struct {
@@ -41,7 +41,7 @@ var extToContentType = map[string]string{
 	"":      "test/html",
 }
 
-func handleConnection(conn net.Conn, opts Opts) {
+func DefaultHandler(conn net.Conn, opts Opts) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
@@ -118,25 +118,25 @@ func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, server 
 	for range numberOfTaskWorkers {
 		go func() {
 			for task := range tasks {
-				server.handler(task, server.opts)
+				server.Handler(task, server.Opts)
 			}
 		}()
 	}
 }
 
 func (server *HttpServer) Run() {
-	createDirectoryIfNotExists(server.opts.ReadDirectory)
-	createDirectoryIfNotExists(server.opts.WriteDirectory)
+	createDirectoryIfNotExists(server.Opts.ReadDirectory)
+	createDirectoryIfNotExists(server.Opts.WriteDirectory)
 
 	var tasks = make(chan Task)
-	startConnectionHandlers(tasks, server.numberOfConnectionHandlers, server)
-	logger.Println("Server starting, listening on", server.listener.Addr())
+	startConnectionHandlers(tasks, server.NumberOfConnectionHandlers, server)
+	logger.Println("Server starting, listening on", server.Listener.Addr())
 
 	for {
-		conn, err := server.listener.Accept()
+		conn, err := server.Listener.Accept()
 		if err != nil {
 			if isClosedConnError(err) {
-				logger.Println("Listener closed on ", server.listener.Addr())
+				logger.Println("Listener closed on ", server.Listener.Addr())
 				return
 			}
 			logger.Println("Listener error:", err)
@@ -147,20 +147,18 @@ func (server *HttpServer) Run() {
 }
 
 func (s *HttpServer) Stop() {
-	s.listener.Close()
+	s.Listener.Close()
 }
 
-func main() {
-	port := readPortFromArgs()
+func CreateServer(port string) *HttpServer {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		logger.Fatalf("Error listening on port %s: %v", port, err)
 	}
-	server := HttpServer{
-		opts:                       Opts{ReadDirectory: "public", WriteDirectory: "public"},
-		listener:                   listener,
-		numberOfConnectionHandlers: numberOfConnectionHandlers,
-		handler:                    handleConnection,
+	return &HttpServer{
+		Opts:                       Opts{ReadDirectory: "public", WriteDirectory: "public"},
+		Listener:                   listener,
+		NumberOfConnectionHandlers: numberOfConnectionHandlers,
+		Handler:                    DefaultHandler,
 	}
-	server.Run()
 }
