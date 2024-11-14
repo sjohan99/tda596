@@ -65,6 +65,7 @@ func getHandler(conn net.Conn, req *http.Request, opts Opts) {
 	fileName, fileContentType, err := checkFileFormat(req, opts.ReadDirectory)
 	if err != nil {
 		respondWithErrorMessage(http.StatusBadRequest, err.Error(), conn)
+		return
 	}
 	file, err := os.Open(fileName)
 	if err != nil {
