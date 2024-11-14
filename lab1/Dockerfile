@@ -10,6 +10,6 @@ COPY . .
 
 RUN go build -o bin/http_server ./cmd/httpserver
 
-EXPOSE 8080
+EXPOSE 80
 
-CMD ["./bin/http_server", "8080"]
+CMD ["./bin/http_server", "80"]
