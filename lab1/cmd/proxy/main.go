@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	proxy.Hello()
+	proxy.Proxy("8081")
 }

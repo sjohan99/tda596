@@ -8,8 +8,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN go build ./cmd/http_server
+RUN go build -o bin/http_server ./cmd/httpserver
 
 EXPOSE 8080
 
-CMD ["./http_server", "8080"]
+CMD ["./bin/http_server", "8080"]

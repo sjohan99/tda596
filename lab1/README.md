@@ -1,23 +1,27 @@
 # Build
 
 ## Http Server
+
 ```
-go build ./cmd/httpserver
+go build -o bin/http_server ./cmd/httpserver
 ```
 
 ## Proxy
+
 ```
-go build ./cmd/proxy
+go build -o bin/proxy ./cmd/proxy
 ```
 
 # Usage
 
 ## HttpServer
+
 ```
 ./httpserver <port>
 ```
 
 ## Proxy
+
 ```
 ./proxy <port>
 ```
@@ -25,6 +29,7 @@ go build ./cmd/proxy
 # Test
 
 ## Run all tests
+
 ```
 go test ./...
 ```

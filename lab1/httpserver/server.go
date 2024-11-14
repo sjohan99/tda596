@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 )
 
@@ -41,11 +42,32 @@ var extToContentType = map[string]string{
 	"":      "test/html",
 }
 
+func Get(url *url.URL) (*http.Response, error) {
+	conn, err := net.Dial("tcp", url.Host)
+	if err != nil {
+		logger.Println("Error connecting to server:", err)
+		return nil, nil
+	}
+	req := http.Request{
+		Method: "GET",
+		URL:    url,
+		Proto: "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+	}
+	req.Write(conn)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		logger.Println("Error reading response:", err)
+	}
+	return resp, nil
+}
+
 func DefaultHandler(conn net.Conn, opts Opts) {
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
-		respondWithStatus(http.StatusBadRequest, conn)
+		RespondWithStatus(http.StatusBadRequest, conn)
 		return
 	}
 
@@ -55,7 +77,7 @@ func DefaultHandler(conn net.Conn, opts Opts) {
 	case "POST":
 		postHandler(conn, req, opts)
 	default:
-		respondWithStatus(http.StatusNotImplemented, conn)
+		RespondWithStatus(http.StatusNotImplemented, conn)
 	}
 	defer conn.Close()
 }
@@ -71,18 +93,18 @@ func getHandler(conn net.Conn, req *http.Request, opts Opts) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			logger.Println("File not found:", fileName)
-			respondWithStatus(http.StatusNotFound, conn)
+			RespondWithStatus(http.StatusNotFound, conn)
 			return
 		}
 		logger.Println("Error reading file:", err)
-		respondWithStatus(http.StatusInternalServerError, conn)
+		RespondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
 
 	file_stats, err := file.Stat()
 	if err != nil {
 		logger.Println("Error getting file stats:", err)
-		respondWithStatus(http.StatusInternalServerError, conn)
+		RespondWithStatus(http.StatusInternalServerError, conn)
 	}
 	httpResponse := createResponse(http.StatusOK, fileContentType, fmt.Sprint(file_stats.Size()), file)
 	httpResponse.Write(conn)
@@ -102,17 +124,17 @@ func postHandler(conn net.Conn, req *http.Request, opts Opts) {
 	file, err := os.Create(fileName)
 	if err != nil {
 		logger.Println("Error creating file:", err)
-		respondWithStatus(http.StatusInternalServerError, conn)
+		RespondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
 	defer file.Close()
 	_, err = io.Copy(file, req.Body)
 	if err != nil {
 		logger.Println("Error copying file:", err)
-		respondWithStatus(http.StatusInternalServerError, conn)
+		RespondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
-	respondWithStatus(http.StatusCreated, conn)
+	RespondWithStatus(http.StatusCreated, conn)
 }
 
 func startConnectionHandlers(tasks <-chan Task, numberOfTaskWorkers int, server *HttpServer) {

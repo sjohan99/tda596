@@ -7,6 +7,7 @@ import (
 	"lab1/httpserver"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,4 +243,28 @@ func TestMaxConnections(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestClientGet(t *testing.T) {
+	server := setupTest(t, defaultReadDir, "", nil)
+	defer server.Stop()
+	reqUrl, err := url.Parse(endpoint(server) + "/testfile.txt")
+	if err != nil {
+		t.Errorf("Failed to parse URL: %v", err)
+	}
+	resp, err := httpserver.Get(reqUrl)
+	if err != nil {
+		t.Errorf("Failed to make GET request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status OK but got %v", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Errorf("Failed to read response body: %v", err)
+	}
+	if string(body) != "this is text content\n" {
+		t.Errorf("Expected body to be 'this is text content\n' but got '%v'", string(body))
+	}
 }

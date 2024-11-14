@@ -33,7 +33,7 @@ func createResponse(status int, contentType, contentLength string, body io.ReadC
 	return response
 }
 
-func respondWithStatus(status int, conn net.Conn) {
+func RespondWithStatus(status int, conn net.Conn) {
 	httpResponse := createBaseResponse(status)
 	httpResponse.Write(conn)
 }
@@ -46,7 +46,7 @@ func respondWithErrorMessage(status int, message string, conn net.Conn) {
 	jsonBytes, err := json.Marshal(response)
 	if err != nil {
 		logger.Println("Error marshalling JSON:", err)
-		respondWithStatus(http.StatusInternalServerError, conn)
+		RespondWithStatus(http.StatusInternalServerError, conn)
 		return
 	}
 	httpResponse := createResponse(status, "application/json", fmt.Sprint(len(jsonBytes)), io.NopCloser(bytes.NewReader(jsonBytes)))
