@@ -20,12 +20,12 @@ func proxyHandler(conn net.Conn, _ httpserver.Opts) {
 		httpserver.RespondWithStatus(http.StatusNotImplemented, conn)
 		return
 	}
-	print(req.URL.String())
 	resp, err := httpserver.Get(req.URL)
 	if err != nil {
-		httpserver.RespondWithStatus(http.StatusInternalServerError, conn)
+		httpserver.RespondWithStatus(http.StatusBadGateway, conn)
 		return
 	}
+	fmt.Println("Response:", resp)
 	resp.Write(conn)
 }
 
@@ -39,6 +39,7 @@ func Proxy(port string) {
 		Handler: proxyHandler,
 		NumberOfConnectionHandlers: 10,
 		Listener: listener,
+		Opts: httpserver.Opts{ReadDirectory: "", WriteDirectory: ""},
 	}
 	server.Run()
 }

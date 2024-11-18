@@ -140,7 +140,6 @@ func TestPostNonExistingFileShouldSucceed(t *testing.T) {
 	expectedFileContent := "test content"
 	testFile := "tmp.txt"
 
-	// localhost:port/?file=tmp.txt
 	resp, err := http.Post(endpoint(server)+"/"+testFile, "text/plain", strings.NewReader(expectedFileContent))
 	if err != nil {
 		t.Errorf("Failed to make POST request: %v", err)
@@ -225,8 +224,8 @@ func TestMaxConnections(t *testing.T) {
 			t.Fatalf("Expected inUse to be <= 10 but got %v", currentlyInUse)
 		}
 		time.Sleep(250 * time.Millisecond)
-		atomic.AddInt32(&inUse, -1)
 		httpserver.DefaultHandler(conn, opts)
+		atomic.AddInt32(&inUse, -1)
 	}
 	server := setupTest(t, defaultReadDir, "", testHandler)
 	defer server.Stop()

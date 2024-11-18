@@ -15,7 +15,7 @@ type HttpServer struct {
 	NumberOfConnectionHandlers int          // number of go routines to handle connections
 	Listener                   net.Listener // listener to accept connections
 	Opts                       Opts         // options for the server
-	Handler                    Handler
+	Handler                    Handler      // function to handle connections
 }
 
 type Opts struct {
@@ -43,10 +43,15 @@ var extToContentType = map[string]string{
 }
 
 func Get(url *url.URL) (*http.Response, error) {
+	// url library does not include port in the Host field if it is the default port (80)
+	// but we need the port for net.Dial()
+	if url.Port() == "" {
+		url.Host = url.Host + ":80"
+	}
 	conn, err := net.Dial("tcp", url.Host)
 	if err != nil {
 		logger.Println("Error connecting to server:", err)
-		return nil, nil
+		return nil, err
 	}
 	req := http.Request{
 		Method: "GET",
@@ -82,7 +87,6 @@ func DefaultHandler(conn net.Conn, opts Opts) {
 	defer conn.Close()
 }
 
-// handle get requests
 func getHandler(conn net.Conn, req *http.Request, opts Opts) {
 	fileName, fileContentType, err := checkFileFormat(req, opts.ReadDirectory)
 	if err != nil {

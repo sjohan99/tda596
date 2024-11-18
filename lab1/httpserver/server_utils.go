@@ -53,8 +53,8 @@ func respondWithErrorMessage(status int, message string, conn net.Conn) {
 	httpResponse.Write(conn)
 }
 
-// getSecureFilePath returns the path to the file in the public directory
-// and ensures that the file is within the public directory
+// Returns the path to the file in the public directory
+// and ensures that the file is within the allowed directory
 func getSecureFilePath(file_name string, allowedDirectory string) string {
 	return filepath.Join(allowedDirectory, file_name)
 }
@@ -85,6 +85,10 @@ func checkFileFormat(req *http.Request, allowedDirectory string) (string, string
 }
 
 func createDirectoryIfNotExists(dir string) error {
+	if dir == "" {
+		logger.Println("No directory specified, will not create directory")
+		return nil
+	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		logger.Printf("Content directory %s does not exist, will create directory", dir)
 		if err := os.MkdirAll(dir, os.ModeDir); err != nil {
