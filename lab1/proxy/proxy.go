@@ -25,7 +25,6 @@ func proxyHandler(conn net.Conn, _ httpserver.Opts) {
 		httpserver.RespondWithStatus(http.StatusBadGateway, conn)
 		return
 	}
-	fmt.Println("Response:", resp)
 	resp.Write(conn)
 }
 
