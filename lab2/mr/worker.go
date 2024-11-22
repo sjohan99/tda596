@@ -1,48 +1,148 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"strconv"
+	"time"
+)
 
-
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
+func (c *WorkerRPC) ExampleWorker(args *ExampleArgs, reply *ExampleReply) error {
+	reply.Y = args.X + 1
+	return nil
+}
+
+func (c *WorkerRPC) Ping(args *Empty, reply *Empty) error {
+	return nil
+}
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func initWorker() {
+	workerRPC := new(WorkerRPC)
+	sockname := workerRPC.server()
 
-//
+	args := WorkerAddressArgs{sockname}
+	reply := WorkerAddressReply{}
+
+	ok := call("Coordinator.RegisterWorker", &args, &reply)
+	if !ok {
+		log.Fatalf("failed to do task")
+	}
+}
+
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	initWorker()
 
-	// Your worker implementation here.
+	args := WorkerArgs{}
+	reply := WorkerReply{}
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	for {
+		ok := call("Coordinator.RequestTask", &args, &reply)
+		if !ok {
+			log.Fatalf("Coordinator.RequestTask failed")
+		}
+		if reply.Split == "" {
+			fmt.Println("No available task, sleeping a while")
+			time.Sleep(3 * time.Second)
+		} else {
+			break
+		}
+	}
+
+	// TODO handle reply.Input being empty (no available task)
+	fmt.Println(reply.Split)
+
+	filename := reply.Split
+
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+
+	fmt.Println("Map task", reply.MapNumber, "Reduce task", reply.ReduceNumber)
+
+	kvs := mapf(filename, string(content))
+	encodeFile(&reply, kvs)
 
 }
 
-//
+func encodeFile(rep *WorkerReply, kvs []KeyValue) string {
+	intermediateFilename := "mr-" + strconv.Itoa(int(rep.MapNumber))
+	intermediateFile, err := os.Create(intermediateFilename)
+	if err != nil {
+		log.Fatalf("cannot create %v", intermediateFilename)
+	}
+	enc := json.NewEncoder(intermediateFile)
+	for _, kv := range kvs {
+		err := enc.Encode(&kv)
+		if err != nil {
+			log.Fatalf("cannot encode %v", kv)
+		}
+	}
+	return intermediateFilename
+}
+
+func decodeFile(rep *WorkerReply) []KeyValue {
+	intermediateFilename := "mr-" + strconv.Itoa(int(rep.MapNumber))
+	intermediateFile, err := os.Create(intermediateFilename)
+	if err != nil {
+		log.Fatalf("cannot create %v", intermediateFilename)
+	}
+	dec := json.NewDecoder(intermediateFile)
+	kvs := []KeyValue{}
+	for {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			break
+		}
+		kvs = append(kvs, kv)
+	}
+	return kvs
+}
+
+func (w *WorkerRPC) server() (sockname string) {
+	rpc.Register(w)
+	rpc.HandleHTTP()
+	sockname = workerSock()
+	os.Remove(sockname)
+	l, e := net.Listen("unix", sockname)
+	if e != nil {
+		log.Fatal("listen error:", e)
+	}
+	go http.Serve(l, nil)
+	return sockname
+}
+
 // example function to show how to make an RPC call to the coordinator.
 //
 // the RPC argument and reply types are defined in rpc.go.
-//
 func CallExample() {
 
 	// declare an argument structure.
@@ -65,27 +165,4 @@ func CallExample() {
 	} else {
 		fmt.Printf("call failed!\n")
 	}
-}
-
-//
-// send an RPC request to the coordinator, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-//
-func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
-	if err != nil {
-		log.Fatal("dialing:", err)
-	}
-	defer c.Close()
-
-	err = c.Call(rpcname, args, reply)
-	if err == nil {
-		return true
-	}
-
-	fmt.Println(err)
-	return false
 }
