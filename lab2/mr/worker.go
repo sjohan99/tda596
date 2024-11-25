@@ -10,9 +10,17 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"strconv"
+	"sort"
 	"time"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -55,23 +63,75 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	initWorker()
 
-	args := WorkerArgs{}
-	reply := WorkerReply{}
+	args := RequestTaskArgs{}
+	reply := RequestTaskReply{}
 
 	for {
 		ok := call("Coordinator.RequestTask", &args, &reply)
 		if !ok {
 			log.Fatalf("Coordinator.RequestTask failed")
 		}
-		if reply.Split == "" {
+		switch reply.Type {
+		case "wait":
 			fmt.Println("No available task, sleeping a while")
 			time.Sleep(3 * time.Second)
-		} else {
-			break
+
+		case "map":
+			workerDoesMapping(reply, mapf)
+		case "reduce":
+			workerDoesReduce(reply, reducef)
 		}
 	}
 
 	// TODO handle reply.Input being empty (no available task)
+
+}
+
+func workerDoesReduce(reply RequestTaskReply, reducef func(string, []string) string) {
+	tempfile, err := ioutil.TempFile("", "mr-out-temp-*")
+	if err != nil {
+		log.Fatalf("cannot create temp file")
+	}
+
+	intermediate := []KeyValue{}
+	for _, mapNumber := range reply.FileNumbers {
+		filename := fmt.Sprintf("mr-%d-%d", mapNumber, reply.ReduceNumber)
+		intermediate = append(intermediate, decodeFile(filename)...)
+	}
+	sort.Sort(ByKey(intermediate))
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(tempfile, "%v %v\n", intermediate[i].Key, output)
+		i = j
+	}
+	tempfile.Close()
+	oname := fmt.Sprintf("mr-out-%d", reply.ReduceNumber)
+	err = os.Rename(tempfile.Name(), oname)
+	if err != nil {
+		log.Fatalf("cannot rename %v to %v", tempfile.Name(), oname)
+	}
+
+	args := ReduceFinishedArgs{reply.ReduceNumber}
+	reduceFinishedReply := Empty{}
+	ok := call("Coordinator.FinishReduce", &args, &reduceFinishedReply)
+	if !ok {
+		log.Fatalf("Coordinator.FinishReduce failed")
+	}
+}
+
+func workerDoesMapping(reply RequestTaskReply, mapf func(string, string) []KeyValue) {
 	fmt.Println(reply.Split)
 
 	filename := reply.Split
@@ -86,15 +146,23 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 	file.Close()
 
-	fmt.Println("Map task", reply.MapNumber, "Reduce task", reply.ReduceNumber)
-
 	kvs := mapf(filename, string(content))
-	encodeFile(&reply, kvs)
+	part := len(kvs) / reply.R // TODO rename
+	for i := 0; i < reply.R; i++ {
+		s := kvs[i*part : (i+1)*part]
+		encodeFile(&reply, s, i)
+	}
 
+	args := MapFinishedArgs{int(reply.MapNumber), reply.Split}
+	mapFinishedReply := Empty{}
+	ok := call("Coordinator.FinishMap", &args, &mapFinishedReply)
+	if !ok {
+		log.Fatalf("Coordinator.FinishMap failed")
+	}
 }
 
-func encodeFile(rep *WorkerReply, kvs []KeyValue) string {
-	intermediateFilename := "mr-" + strconv.Itoa(int(rep.MapNumber))
+func encodeFile(rep *RequestTaskReply, kvs []KeyValue, i int) string {
+	intermediateFilename := fmt.Sprintf("mr-%d-%d", rep.MapNumber, i)
 	intermediateFile, err := os.Create(intermediateFilename)
 	if err != nil {
 		log.Fatalf("cannot create %v", intermediateFilename)
@@ -109,12 +177,12 @@ func encodeFile(rep *WorkerReply, kvs []KeyValue) string {
 	return intermediateFilename
 }
 
-func decodeFile(rep *WorkerReply) []KeyValue {
-	intermediateFilename := "mr-" + strconv.Itoa(int(rep.MapNumber))
-	intermediateFile, err := os.Create(intermediateFilename)
+func decodeFile(filename string) []KeyValue {
+	intermediateFile, err := os.Open(filename)
 	if err != nil {
-		log.Fatalf("cannot create %v", intermediateFilename)
+		log.Fatalf("cannot open %v", filename)
 	}
+	defer intermediateFile.Close()
 	dec := json.NewDecoder(intermediateFile)
 	kvs := []KeyValue{}
 	for {

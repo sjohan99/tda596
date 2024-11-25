@@ -1,5 +1,7 @@
 .PHONY: build coord worker build-no-race coord-no-race worker-no-race
 
+all: clean build coord
+
 build:
 	go build -race -buildmode=plugin -gcflags="all=-N -l" ../mrapps/wc.go
 

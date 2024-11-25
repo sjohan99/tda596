@@ -28,14 +28,20 @@ type ExampleReply struct {
 	Y int
 }
 
-type WorkerArgs struct {
+type RequestTaskArgs struct {
 }
 
-type WorkerReply struct {
+type RequestTaskReply struct {
+	Type         string // "map" or "reduce" or "wait" or "done"
 	Split        string
 	R            int
 	MapNumber    uint32
-	ReduceNumber uint32
+	FileNumbers  []int
+	ReduceNumber int
+}
+
+type ReduceFinishedArgs struct {
+	ReduceNumber int
 }
 
 type WorkerAddressArgs struct {
@@ -47,8 +53,8 @@ type WorkerAddressReply struct {
 }
 
 type MapFinishedArgs struct {
-	Filename string
-	Split    string
+	MapNumber int
+	Split     string
 }
 
 type Empty struct{}

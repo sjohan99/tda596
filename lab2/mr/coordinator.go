@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,7 @@ type Tasks struct {
 	mu           sync.Mutex
 	splits       []string
 	mapTasks     map[string]string // worker -> split
-	intermediate []string          // filename
+	intermediate []int             // map number
 	reduceTasks  map[string]string // worker -> filename
 }
 
@@ -82,11 +83,11 @@ func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
 	c.tasks.mu.Lock()
 	defer c.tasks.mu.Unlock()
 	delete(c.tasks.mapTasks, args.Split)
-	c.tasks.intermediate = append(c.tasks.intermediate, args.Filename)
+	c.tasks.intermediate = append(c.tasks.intermediate, args.MapNumber)
 	return nil
 }
 
-func (c *Coordinator) RequestTask(args *WorkerArgs, reply *WorkerReply) error {
+func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
 	c.tasks.mu.Lock()
 	defer c.tasks.mu.Unlock()
 	splits := c.tasks.splits
@@ -95,9 +96,32 @@ func (c *Coordinator) RequestTask(args *WorkerArgs, reply *WorkerReply) error {
 		c.tasks.splits = splits[:len(splits)-1]
 		reply.MapNumber = atomic.AddUint32(&c.mapNumber, 1)
 		reply.R = c.nReduce
+		reply.Type = "map"
+
 		return nil
 	}
-	reply.Split = ""
+
+	if len(c.tasks.mapTasks) > 0 {
+		reply.Type = "wait"
+		return nil
+	}
+
+	intermediateFiles := c.tasks.intermediate
+	if len(c.tasks.intermediate) > 0 {
+		reply.FileNumbers = intermediateFiles
+		reply.R = c.nReduce
+		reply.ReduceNumber = int(atomic.AddUint32(&c.reduceNumber, 1))
+		reply.Type = "reduce"
+		return nil
+	}
+	reply.Type = "done"
+	return nil
+}
+
+func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
+	c.tasks.mu.Lock()
+	defer c.tasks.mu.Unlock()
+	delete(c.tasks.reduceTasks, strconv.Itoa(args.ReduceNumber))
 	return nil
 }
 
