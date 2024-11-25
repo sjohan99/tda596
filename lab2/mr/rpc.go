@@ -29,6 +29,7 @@ type ExampleReply struct {
 }
 
 type RequestTaskArgs struct {
+	WorkerId string
 }
 
 type RequestTaskReply struct {
@@ -40,21 +41,39 @@ type RequestTaskReply struct {
 	ReduceNumber int
 }
 
+type ReqTaskReply struct {
+	Type       TaskType
+	MapTask    MapArgs
+	ReduceTask ReduceArgs
+}
+
+type MapArgs struct {
+	File       string // File to read from
+	Partitions int    // How many partitions to split the file into
+	WorkerId   string // File key to use for intermediate files
+	TaskId     int
+}
+
+type ReduceArgs struct {
+	Partitions   int
+	WorkerIds    []string // mr-<WorkerId>-<0..Partitions>
+	ReduceNumber int      // for output file -> mr-out-ReduceNumber
+	WorkerId     string
+}
+
 type ReduceFinishedArgs struct {
+	WorkerId     string
 	ReduceNumber int
 }
 
-type WorkerAddressArgs struct {
+type RegisterWorkerArgs struct {
 	Sockname string
-}
-
-type WorkerAddressReply struct {
-	Success bool
+	WorkerId string
 }
 
 type MapFinishedArgs struct {
-	MapNumber int
-	Split     string
+	WorkerId string
+	TaskId   int
 }
 
 type Empty struct{}
@@ -66,15 +85,15 @@ type Empty struct{}
 // Can't use the current directory since
 // Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
-	s := "/var/tmp/5840-mr-"
+	s := "/var/tmp/5840-mr-coordinator-"
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
 
-func workerSock() string {
-	s := "/var/tmp/5840-mr-"
-	s += strconv.Itoa(os.Getpid())
-	return s
+func workerSock() (string, string) {
+	id := strconv.Itoa(os.Getpid())
+	s := "/var/tmp/5840-mr-worker-" + id
+	return s, id
 }
 
 type WorkerRPC struct {

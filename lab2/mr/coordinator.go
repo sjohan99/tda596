@@ -9,64 +9,107 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// type TaskState int
+type TaskState int
 
-// const (
-// 	UNPROCCESSED TaskState = iota
-// 	MAPPING      TaskState = iota
-// 	REDUCING     TaskState = iota
-// 	PROCCESSED   TaskState = iota
-// )
+const (
+	IDLE TaskState = iota
+	INPROGRESS
+	COMPLETED
+)
 
-type Tasks struct {
-	mu           sync.Mutex
-	splits       []string
-	mapTasks     map[string]string // worker -> split
-	intermediate []int             // map number
-	reduceTasks  map[string]string // worker -> filename
-}
+type TaskType int
 
-type Workers struct {
-	mu           sync.Mutex
-	workerSplits map[string]string // worker -> split
-}
+const (
+	MAP TaskType = iota
+	REDUCE
+	WAIT
+	DONE
+)
+
+// type Tasks struct {
+// 	mu           sync.Mutex
+// 	splits       []string
+// 	mapTasks     map[string]string // worker -> split
+// 	intermediate []int             // map number
+// 	reduceTasks  map[string]string // worker -> filename
+// }
+
+// type Workers struct {
+// 	mu           sync.Mutex
+// 	workerSplits map[string]string // worker -> split
+// }
+
+// type Coordinator struct {
+// 	tasks        Tasks
+// 	workers      Workers
+// 	nReduce      int
+// 	mapNumber    uint32
+// 	reduceNumber uint32
+// }
+
+type Available bool
 
 type Coordinator struct {
-	tasks        Tasks
-	workers      Workers
-	nReduce      int
-	mapNumber    uint32
-	reduceNumber uint32
+	mu          sync.Mutex
+	mapTasks    MapTasks
+	reduceTasks ReduceTasks
+	files       map[string]Available
+	reduceIds   map[int]Available
+}
+
+type MapTasks struct {
+	tasks          map[string]map[int]MapTask
+	completedTasks int
+	totalTasks     int
+	id             int
+}
+
+type ReduceTasks struct {
+	tasks          map[string]map[int]ReduceTask
+	completedTasks int
+	totalTasks     int
+}
+
+type MapTask struct {
+	state TaskState
+	file  string
+	id    int
+}
+
+type ReduceTask struct {
+	state   TaskState
+	fileKey int // in an intermediate file: mr-mapId-<fileKey>
 }
 
 func (c *Coordinator) resetTask(worker string) {
-	c.workers.mu.Lock()
-	split, ok := c.workers.workerSplits[worker]
-	if !ok {
-		return
-	}
-	delete(c.workers.workerSplits, worker)
-	c.workers.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// No split was assigned to this worker
-	if split == "" {
-		return
-	}
-
-	c.tasks.mu.Lock()
-	defer c.tasks.mu.Unlock()
-	delete(c.tasks.mapTasks, worker)
-	delete(c.tasks.reduceTasks, worker)
-	for _, existingSplit := range c.tasks.splits {
-		if existingSplit == split {
-			return
+	tasks, ok := c.mapTasks.tasks[worker]
+	if ok {
+		for _, task := range tasks {
+			if task.state == COMPLETED {
+				c.mapTasks.completedTasks--
+				c.files[task.file] = true
+				// TODO notify reduce workers
+			}
 		}
+		delete(c.mapTasks.tasks, worker)
+		return
 	}
-	c.tasks.splits = append(c.tasks.splits, split)
+
+	reduceTasks, ok := c.reduceTasks.tasks[worker]
+	if ok {
+		for _, reduceTask := range reduceTasks {
+			if reduceTask.state == INPROGRESS {
+				c.resetReduceNumber(reduceTask.fileKey)
+			}
+		}
+		delete(c.reduceTasks.tasks, worker)
+	}
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -80,67 +123,127 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
-	c.tasks.mu.Lock()
-	defer c.tasks.mu.Unlock()
-	delete(c.tasks.mapTasks, args.Split)
-	c.tasks.intermediate = append(c.tasks.intermediate, args.MapNumber)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tasks := c.mapTasks.tasks[args.WorkerId]
+	task := tasks[args.TaskId]
+	task.state = COMPLETED
+	c.mapTasks.tasks[args.WorkerId][args.TaskId] = task
+	c.mapTasks.completedTasks++
 	return nil
 }
 
-func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
-	c.tasks.mu.Lock()
-	defer c.tasks.mu.Unlock()
-	splits := c.tasks.splits
-	if len(splits) > 0 {
-		reply.Split = splits[len(splits)-1]
-		c.tasks.splits = splits[:len(splits)-1]
-		reply.MapNumber = atomic.AddUint32(&c.mapNumber, 1)
-		reply.R = c.nReduce
-		reply.Type = "map"
+func (c *Coordinator) findReduceNumber() int {
+	for i, available := range c.reduceIds {
+		if available {
+			c.reduceIds[i] = false
+			return i
+		}
+	}
+	return -1
+}
 
+func (c *Coordinator) resetReduceNumber(i int) {
+	c.reduceIds[i] = true
+}
+
+func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.reduceTasks.completedTasks == c.reduceTasks.totalTasks {
+		reply.Type = DONE
 		return nil
 	}
 
-	if len(c.tasks.mapTasks) > 0 {
-		reply.Type = "wait"
+	if c.mapTasks.completedTasks < c.mapTasks.totalTasks {
+		for file, available := range c.files {
+			if available {
+				reply.Type = MAP
+				reply.MapTask = MapArgs{
+					File:       file,
+					Partitions: c.reduceTasks.totalTasks,
+					WorkerId:   args.WorkerId,
+					TaskId:     c.mapTasks.id,
+				}
+				c.files[file] = false
+
+				if _, ok := c.mapTasks.tasks[args.WorkerId]; !ok {
+					c.mapTasks.tasks[args.WorkerId] = make(map[int]MapTask)
+				}
+
+				c.mapTasks.tasks[args.WorkerId][c.mapTasks.id] = MapTask{
+					state: INPROGRESS,
+					file:  file,
+					id:    c.mapTasks.id,
+				}
+				c.mapTasks.id++
+				return nil
+			}
+		}
+		reply.Type = WAIT
 		return nil
 	}
 
-	intermediateFiles := c.tasks.intermediate
-	if len(c.tasks.intermediate) > 0 {
-		reply.FileNumbers = intermediateFiles
-		reply.R = c.nReduce
-		reply.ReduceNumber = int(atomic.AddUint32(&c.reduceNumber, 1))
-		reply.Type = "reduce"
+	if c.reduceTasks.completedTasks < c.reduceTasks.totalTasks {
+		reduceNumber := c.findReduceNumber()
+		if reduceNumber == -1 {
+			reply.Type = WAIT
+			return nil
+		}
+		fileKeys := make([]string, c.mapTasks.totalTasks)
+		for workerId := range c.mapTasks.tasks {
+			for i, task := range c.mapTasks.tasks[workerId] {
+				id := task.id
+				fileKeys[i] = strconv.Itoa(id)
+			}
+		}
+		reply.Type = REDUCE
+		reply.ReduceTask = ReduceArgs{
+			Partitions:   c.reduceTasks.totalTasks,
+			WorkerIds:    fileKeys,
+			ReduceNumber: reduceNumber,
+			WorkerId:     args.WorkerId,
+		}
+
+		if _, ok := c.reduceTasks.tasks[args.WorkerId]; !ok {
+			c.reduceTasks.tasks[args.WorkerId] = make(map[int]ReduceTask)
+		}
+
+		c.reduceTasks.tasks[args.WorkerId][reduceNumber] = ReduceTask{
+			state:   INPROGRESS,
+			fileKey: reduceNumber,
+		}
 		return nil
 	}
-	reply.Type = "done"
+
+	log.Println("RequestTask: Don't think this should happen")
+	reply.Type = WAIT
 	return nil
 }
 
 func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
-	c.tasks.mu.Lock()
-	defer c.tasks.mu.Unlock()
-	delete(c.tasks.reduceTasks, strconv.Itoa(args.ReduceNumber))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	task := c.reduceTasks.tasks[args.WorkerId][args.ReduceNumber]
+	task.state = COMPLETED
+	c.reduceTasks.tasks[args.WorkerId][args.ReduceNumber] = task
+	c.reduceTasks.completedTasks++
 	return nil
 }
 
-func (c *Coordinator) RegisterWorker(args *WorkerAddressArgs, reply *WorkerAddressReply) error {
+func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
 	fmt.Println("Received worker")
-	c.workers.mu.Lock()
-	c.workers.workerSplits[args.Sockname] = ""
-	reply.Success = true
-	c.workers.mu.Unlock()
-	go c.pingWorker(args.Sockname)
+	go c.pingWorker(args.Sockname, args.WorkerId)
 	return nil
 }
 
-func (c *Coordinator) pingWorker(sockname string) {
+func (c *Coordinator) pingWorker(sockname string, workerId string) {
 	for {
 		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
 		if !ok {
 			log.Println("failed to ping worker")
-			c.resetTask(sockname)
+			c.resetTask(workerId)
 			break
 		}
 		time.Sleep(10 * time.Second)
@@ -164,27 +267,37 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reduceTasks.completedTasks == c.reduceTasks.totalTasks
 }
 
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	mapFiles := make(map[string]Available)
+	for _, file := range files {
+		mapFiles[file] = true
+	}
+	reduceIds := make(map[int]Available)
+	for i := 0; i < nReduce; i++ {
+		reduceIds[i] = true
+	}
 	c := Coordinator{
-		tasks: Tasks{
-			splits:      files,
-			mapTasks:    make(map[string]string),
-			reduceTasks: make(map[string]string),
+		mapTasks: MapTasks{
+			tasks:          make(map[string]map[int]MapTask),
+			completedTasks: 0,
+			totalTasks:     len(files),
 		},
-		workers: Workers{
-			workerSplits: make(map[string]string),
+		reduceTasks: ReduceTasks{
+			tasks:          make(map[string]map[int]ReduceTask),
+			completedTasks: 0,
+			totalTasks:     nReduce,
 		},
-		nReduce: nReduce,
+		files:     mapFiles,
+		reduceIds: reduceIds,
 	}
 
 	c.server()

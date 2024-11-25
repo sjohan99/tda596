@@ -11,6 +11,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -45,26 +46,27 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func initWorker() {
+func initWorker() string {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	workerRPC := new(WorkerRPC)
-	sockname := workerRPC.server()
+	sockname, id := workerRPC.server()
 
-	args := WorkerAddressArgs{sockname}
-	reply := WorkerAddressReply{}
+	args := RegisterWorkerArgs{sockname, id}
 
-	ok := call("Coordinator.RegisterWorker", &args, &reply)
+	ok := call("Coordinator.RegisterWorker", &args, &Empty{})
 	if !ok {
 		log.Fatalf("failed to do task")
 	}
+	return id
 }
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	initWorker()
+	id := initWorker()
 
-	args := RequestTaskArgs{}
-	reply := RequestTaskReply{}
+	args := RequestTaskArgs{id}
+	reply := ReqTaskReply{}
 
 	for {
 		ok := call("Coordinator.RequestTask", &args, &reply)
@@ -72,30 +74,30 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Fatalf("Coordinator.RequestTask failed")
 		}
 		switch reply.Type {
-		case "wait":
+		case WAIT:
 			fmt.Println("No available task, sleeping a while")
 			time.Sleep(3 * time.Second)
 
-		case "map":
-			workerDoesMapping(reply, mapf)
-		case "reduce":
-			workerDoesReduce(reply, reducef)
+		case MAP:
+			workerDoesMapping(reply.MapTask, mapf)
+		case REDUCE:
+			workerDoesReduce(reply.ReduceTask, reducef)
+		case DONE:
+			// TODO notify coordinator that worker is done
+			return
 		}
 	}
-
-	// TODO handle reply.Input being empty (no available task)
-
 }
 
-func workerDoesReduce(reply RequestTaskReply, reducef func(string, []string) string) {
+func workerDoesReduce(args ReduceArgs, reducef func(string, []string) string) {
 	tempfile, err := ioutil.TempFile("", "mr-out-temp-*")
 	if err != nil {
 		log.Fatalf("cannot create temp file")
 	}
 
 	intermediate := []KeyValue{}
-	for _, mapNumber := range reply.FileNumbers {
-		filename := fmt.Sprintf("mr-%d-%d", mapNumber, reply.ReduceNumber)
+	for _, workerId := range args.WorkerIds {
+		filename := fmt.Sprintf("mr-%v-%d", workerId, args.ReduceNumber)
 		intermediate = append(intermediate, decodeFile(filename)...)
 	}
 	sort.Sort(ByKey(intermediate))
@@ -117,25 +119,22 @@ func workerDoesReduce(reply RequestTaskReply, reducef func(string, []string) str
 		i = j
 	}
 	tempfile.Close()
-	oname := fmt.Sprintf("mr-out-%d", reply.ReduceNumber)
+	oname := fmt.Sprintf("mr-out-%d", args.ReduceNumber)
 	err = os.Rename(tempfile.Name(), oname)
 	if err != nil {
 		log.Fatalf("cannot rename %v to %v", tempfile.Name(), oname)
 	}
 
-	args := ReduceFinishedArgs{reply.ReduceNumber}
+	finishedArgs := ReduceFinishedArgs{args.WorkerId, args.ReduceNumber}
 	reduceFinishedReply := Empty{}
-	ok := call("Coordinator.FinishReduce", &args, &reduceFinishedReply)
+	ok := call("Coordinator.FinishReduce", &finishedArgs, &reduceFinishedReply)
 	if !ok {
 		log.Fatalf("Coordinator.FinishReduce failed")
 	}
 }
 
-func workerDoesMapping(reply RequestTaskReply, mapf func(string, string) []KeyValue) {
-	fmt.Println(reply.Split)
-
-	filename := reply.Split
-
+func workerDoesMapping(args MapArgs, mapf func(string, string) []KeyValue) {
+	filename := args.File
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -147,22 +146,22 @@ func workerDoesMapping(reply RequestTaskReply, mapf func(string, string) []KeyVa
 	file.Close()
 
 	kvs := mapf(filename, string(content))
-	part := len(kvs) / reply.R // TODO rename
-	for i := 0; i < reply.R; i++ {
+	part := len(kvs) / args.Partitions // TODO rename
+	for i := 0; i < args.Partitions; i++ {
 		s := kvs[i*part : (i+1)*part]
-		encodeFile(&reply, s, i)
+		encodeFile(strconv.Itoa(args.TaskId), s, i)
 	}
 
-	args := MapFinishedArgs{int(reply.MapNumber), reply.Split}
+	finishedArgs := MapFinishedArgs{args.WorkerId, args.TaskId}
 	mapFinishedReply := Empty{}
-	ok := call("Coordinator.FinishMap", &args, &mapFinishedReply)
+	ok := call("Coordinator.FinishMap", &finishedArgs, &mapFinishedReply)
 	if !ok {
 		log.Fatalf("Coordinator.FinishMap failed")
 	}
 }
 
-func encodeFile(rep *RequestTaskReply, kvs []KeyValue, i int) string {
-	intermediateFilename := fmt.Sprintf("mr-%d-%d", rep.MapNumber, i)
+func encodeFile(mapId string, kvs []KeyValue, i int) string {
+	intermediateFilename := fmt.Sprintf("mr-%v-%d", mapId, i)
 	intermediateFile, err := os.Create(intermediateFilename)
 	if err != nil {
 		log.Fatalf("cannot create %v", intermediateFilename)
@@ -195,17 +194,17 @@ func decodeFile(filename string) []KeyValue {
 	return kvs
 }
 
-func (w *WorkerRPC) server() (sockname string) {
+func (w *WorkerRPC) server() (string, string) {
 	rpc.Register(w)
 	rpc.HandleHTTP()
-	sockname = workerSock()
+	sockname, id := workerSock()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
-	return sockname
+	return sockname, id
 }
 
 // example function to show how to make an RPC call to the coordinator.
