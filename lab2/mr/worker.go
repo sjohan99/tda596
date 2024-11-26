@@ -65,10 +65,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	id := initWorker()
 
-	args := RequestTaskArgs{id}
-	reply := ReqTaskReply{}
-
 	for {
+		args := RequestTaskArgs{id}
+		reply := ReqTaskReply{}
 		ok := call("Coordinator.RequestTask", &args, &reply)
 		if !ok {
 			log.Fatalf("Coordinator.RequestTask failed")
@@ -76,12 +75,11 @@ func Worker(mapf func(string, string) []KeyValue,
 		switch reply.Type {
 		case WAIT:
 			fmt.Println("No available task, sleeping a while")
-			time.Sleep(3 * time.Second)
-
+			time.Sleep(time.Second)
 		case MAP:
-			workerDoesMapping(reply.MapTask, mapf)
+			workerMap(reply.MapTask, mapf)
 		case REDUCE:
-			workerDoesReduce(reply.ReduceTask, reducef)
+			workerReduce(reply.ReduceTask, reducef)
 		case DONE:
 			// TODO notify coordinator that worker is done
 			return
@@ -89,7 +87,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 }
 
-func workerDoesReduce(args ReduceArgs, reducef func(string, []string) string) {
+func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	tempfile, err := ioutil.TempFile("", "mr-out-temp-*")
 	if err != nil {
 		log.Fatalf("cannot create temp file")
@@ -100,6 +98,7 @@ func workerDoesReduce(args ReduceArgs, reducef func(string, []string) string) {
 		filename := fmt.Sprintf("mr-%v-%d", workerId, args.ReduceNumber)
 		intermediate = append(intermediate, decodeFile(filename)...)
 	}
+
 	sort.Sort(ByKey(intermediate))
 
 	i := 0
@@ -119,6 +118,7 @@ func workerDoesReduce(args ReduceArgs, reducef func(string, []string) string) {
 		i = j
 	}
 	tempfile.Close()
+
 	oname := fmt.Sprintf("mr-out-%d", args.ReduceNumber)
 	err = os.Rename(tempfile.Name(), oname)
 	if err != nil {
@@ -127,14 +127,14 @@ func workerDoesReduce(args ReduceArgs, reducef func(string, []string) string) {
 
 	finishedArgs := ReduceFinishedArgs{args.WorkerId, args.ReduceNumber}
 	reduceFinishedReply := Empty{}
+	time.Sleep(250 * time.Millisecond)
 	ok := call("Coordinator.FinishReduce", &finishedArgs, &reduceFinishedReply)
 	if !ok {
 		log.Fatalf("Coordinator.FinishReduce failed")
 	}
 }
 
-func workerDoesMapping(args MapArgs, mapf func(string, string) []KeyValue) {
-	filename := args.File
+func readFile(filename string) []byte {
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -144,12 +144,21 @@ func workerDoesMapping(args MapArgs, mapf func(string, string) []KeyValue) {
 		log.Fatalf("cannot read %v", filename)
 	}
 	file.Close()
+	return content
+}
 
-	kvs := mapf(filename, string(content))
-	part := len(kvs) / args.Partitions // TODO rename
+func workerMap(args MapArgs, mapf func(string, string) []KeyValue) {
+	content := readFile(args.File)
+	kvs := mapf(args.File, string(content))
+
+	buckets := make([][]KeyValue, args.Partitions)
+	for _, kv := range kvs {
+		bucket := ihash(kv.Key) % args.Partitions
+		buckets[bucket] = append(buckets[bucket], kv)
+	}
+
 	for i := 0; i < args.Partitions; i++ {
-		s := kvs[i*part : (i+1)*part]
-		encodeFile(strconv.Itoa(args.TaskId), s, i)
+		encodeFile(strconv.Itoa(args.TaskId), buckets[i], i)
 	}
 
 	finishedArgs := MapFinishedArgs{args.WorkerId, args.TaskId}

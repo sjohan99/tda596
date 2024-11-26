@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -29,27 +28,6 @@ const (
 	DONE
 )
 
-// type Tasks struct {
-// 	mu           sync.Mutex
-// 	splits       []string
-// 	mapTasks     map[string]string // worker -> split
-// 	intermediate []int             // map number
-// 	reduceTasks  map[string]string // worker -> filename
-// }
-
-// type Workers struct {
-// 	mu           sync.Mutex
-// 	workerSplits map[string]string // worker -> split
-// }
-
-// type Coordinator struct {
-// 	tasks        Tasks
-// 	workers      Workers
-// 	nReduce      int
-// 	mapNumber    uint32
-// 	reduceNumber uint32
-// }
-
 type Available bool
 
 type Coordinator struct {
@@ -64,7 +42,7 @@ type MapTasks struct {
 	tasks          map[string]map[int]MapTask
 	completedTasks int
 	totalTasks     int
-	id             int
+	idCounter      int
 }
 
 type ReduceTasks struct {
@@ -93,9 +71,9 @@ func (c *Coordinator) resetTask(worker string) {
 		for _, task := range tasks {
 			if task.state == COMPLETED {
 				c.mapTasks.completedTasks--
-				c.files[task.file] = true
 				// TODO notify reduce workers
 			}
+			c.files[task.file] = true
 		}
 		delete(c.mapTasks.tasks, worker)
 		return
@@ -164,7 +142,7 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) er
 					File:       file,
 					Partitions: c.reduceTasks.totalTasks,
 					WorkerId:   args.WorkerId,
-					TaskId:     c.mapTasks.id,
+					TaskId:     c.mapTasks.idCounter,
 				}
 				c.files[file] = false
 
@@ -172,15 +150,16 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) er
 					c.mapTasks.tasks[args.WorkerId] = make(map[int]MapTask)
 				}
 
-				c.mapTasks.tasks[args.WorkerId][c.mapTasks.id] = MapTask{
+				c.mapTasks.tasks[args.WorkerId][c.mapTasks.idCounter] = MapTask{
 					state: INPROGRESS,
 					file:  file,
-					id:    c.mapTasks.id,
+					id:    c.mapTasks.idCounter,
 				}
-				c.mapTasks.id++
+				c.mapTasks.idCounter++
 				return nil
 			}
 		}
+		log.Printf("RequestTask: no files available because all files are in progress")
 		reply.Type = WAIT
 		return nil
 	}
@@ -192,10 +171,12 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) er
 			return nil
 		}
 		fileKeys := make([]string, c.mapTasks.totalTasks)
+		i := 0
 		for workerId := range c.mapTasks.tasks {
-			for i, task := range c.mapTasks.tasks[workerId] {
+			for _, task := range c.mapTasks.tasks[workerId] {
 				id := task.id
 				fileKeys[i] = strconv.Itoa(id)
+				i++
 			}
 		}
 		reply.Type = REDUCE
@@ -233,7 +214,6 @@ func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error
 }
 
 func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
-	fmt.Println("Received worker")
 	go c.pingWorker(args.Sockname, args.WorkerId)
 	return nil
 }
