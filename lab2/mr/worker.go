@@ -11,14 +11,11 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
-	"strconv"
 	"time"
 )
 
-// for sorting by key.
 type ByKey []KeyValue
 
-// for sorting by key.
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
@@ -27,11 +24,6 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 type KeyValue struct {
 	Key   string
 	Value string
-}
-
-func (c *WorkerRPC) ExampleWorker(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
 }
 
 func (c *WorkerRPC) Ping(args *Empty, reply *Empty) error {
@@ -66,7 +58,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	id := initWorker()
 
 	for {
-		args := RequestTaskArgs{id}
+		args := ReqTaskArgs{id}
 		reply := ReqTaskReply{}
 		ok := call("Coordinator.RequestTask", &args, &reply)
 		if !ok {
@@ -74,14 +66,12 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		switch reply.Type {
 		case WAIT:
-			fmt.Println("No available task, sleeping a while")
 			time.Sleep(time.Second)
 		case MAP:
 			workerMap(reply.MapTask, mapf)
 		case REDUCE:
 			workerReduce(reply.ReduceTask, reducef)
 		case DONE:
-			// TODO notify coordinator that worker is done
 			return
 		}
 	}
@@ -93,14 +83,15 @@ func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 		log.Fatalf("cannot create temp file")
 	}
 
+	// read all intermediate files
 	intermediate := []KeyValue{}
-	for _, workerId := range args.WorkerIds {
-		filename := fmt.Sprintf("mr-%v-%d", workerId, args.ReduceNumber)
+	for _, mapId := range args.MapIds {
+		filename := fmt.Sprintf("mr-%v-%d", mapId, args.ReduceId)
 		intermediate = append(intermediate, decodeFile(filename)...)
 	}
-
 	sort.Sort(ByKey(intermediate))
 
+	// call reduce function on each unique key in intermediate and write to output
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
@@ -119,13 +110,15 @@ func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	}
 	tempfile.Close()
 
-	oname := fmt.Sprintf("mr-out-%d", args.ReduceNumber)
+	// rename temp file to output file
+	oname := fmt.Sprintf("mr-out-%d", args.ReduceId)
 	err = os.Rename(tempfile.Name(), oname)
 	if err != nil {
 		log.Fatalf("cannot rename %v to %v", tempfile.Name(), oname)
 	}
 
-	finishedArgs := ReduceFinishedArgs{args.WorkerId, args.ReduceNumber}
+	// notify the coordinator that the reduce task is done
+	finishedArgs := ReduceFinishedArgs{args.WorkerId, args.ReduceId}
 	reduceFinishedReply := Empty{}
 	time.Sleep(250 * time.Millisecond)
 	ok := call("Coordinator.FinishReduce", &finishedArgs, &reduceFinishedReply)
@@ -134,7 +127,34 @@ func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	}
 }
 
-func readFile(filename string) []byte {
+func workerMap(args MapArgs, mapf func(string, string) []KeyValue) {
+	content := readFile(args.File)
+	kvs := mapf(args.File, content)
+
+	// partition the key-values into buckets
+	buckets := make([][]KeyValue, args.Partitions)
+	for _, kv := range kvs {
+		bucket := ihash(kv.Key) % args.Partitions
+		buckets[bucket] = append(buckets[bucket], kv)
+	}
+
+	// write the buckets to intermediate files
+	for reduceId := 0; reduceId < args.Partitions; reduceId++ {
+		mapId := args.TaskId
+		bucket := buckets[reduceId]
+		encodeFile(mapId, reduceId, bucket)
+	}
+
+	// notify the coordinator that the map task is done
+	finishedArgs := MapFinishedArgs{args.WorkerId, args.TaskId}
+	mapFinishedReply := Empty{}
+	ok := call("Coordinator.FinishMap", &finishedArgs, &mapFinishedReply)
+	if !ok {
+		log.Fatalf("Coordinator.FinishMap failed")
+	}
+}
+
+func readFile(filename string) string {
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -144,33 +164,11 @@ func readFile(filename string) []byte {
 		log.Fatalf("cannot read %v", filename)
 	}
 	file.Close()
-	return content
+	return string(content)
 }
 
-func workerMap(args MapArgs, mapf func(string, string) []KeyValue) {
-	content := readFile(args.File)
-	kvs := mapf(args.File, string(content))
-
-	buckets := make([][]KeyValue, args.Partitions)
-	for _, kv := range kvs {
-		bucket := ihash(kv.Key) % args.Partitions
-		buckets[bucket] = append(buckets[bucket], kv)
-	}
-
-	for i := 0; i < args.Partitions; i++ {
-		encodeFile(strconv.Itoa(args.TaskId), buckets[i], i)
-	}
-
-	finishedArgs := MapFinishedArgs{args.WorkerId, args.TaskId}
-	mapFinishedReply := Empty{}
-	ok := call("Coordinator.FinishMap", &finishedArgs, &mapFinishedReply)
-	if !ok {
-		log.Fatalf("Coordinator.FinishMap failed")
-	}
-}
-
-func encodeFile(mapId string, kvs []KeyValue, i int) string {
-	intermediateFilename := fmt.Sprintf("mr-%v-%d", mapId, i)
+func encodeFile(mapId MapTaskId, reduceId ReduceTaskId, kvs []KeyValue) string {
+	intermediateFilename := fmt.Sprintf("mr-%d-%d", mapId, reduceId)
 	intermediateFile, err := os.Create(intermediateFilename)
 	if err != nil {
 		log.Fatalf("cannot create %v", intermediateFilename)
@@ -214,31 +212,4 @@ func (w *WorkerRPC) server() (string, string) {
 	}
 	go http.Serve(l, nil)
 	return sockname, id
-}
-
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
 }

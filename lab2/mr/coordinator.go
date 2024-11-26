@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -29,37 +28,40 @@ const (
 )
 
 type Available bool
+type MapTaskId = int
+type ReduceTaskId = int
+type WorkerId = string
 
 type Coordinator struct {
 	mu          sync.Mutex
 	mapTasks    MapTasks
 	reduceTasks ReduceTasks
 	files       map[string]Available
-	reduceIds   map[int]Available
+	reduceIds   map[ReduceTaskId]Available
 }
 
 type MapTasks struct {
-	tasks          map[string]map[int]MapTask
+	tasks          map[WorkerId]map[MapTaskId]MapTask
 	completedTasks int
 	totalTasks     int
-	idCounter      int
+	idCounter      MapTaskId
 }
 
 type ReduceTasks struct {
-	tasks          map[string]map[int]ReduceTask
+	tasks          map[WorkerId]map[ReduceTaskId]ReduceTask
 	completedTasks int
 	totalTasks     int
 }
 
 type MapTask struct {
-	state TaskState
-	file  string
-	id    int
+	state     TaskState
+	file      string
+	mapTaskId MapTaskId
 }
 
 type ReduceTask struct {
-	state   TaskState
-	fileKey int // in an intermediate file: mr-mapId-<fileKey>
+	state  TaskState
+	taskId ReduceTaskId // in an intermediate file: mr-mapId-<fileKey>
 }
 
 func (c *Coordinator) resetTask(worker string) {
@@ -76,28 +78,17 @@ func (c *Coordinator) resetTask(worker string) {
 			c.files[task.file] = true
 		}
 		delete(c.mapTasks.tasks, worker)
-		return
 	}
 
 	reduceTasks, ok := c.reduceTasks.tasks[worker]
 	if ok {
 		for _, reduceTask := range reduceTasks {
 			if reduceTask.state == INPROGRESS {
-				c.resetReduceNumber(reduceTask.fileKey)
+				c.resetReduceId(reduceTask.taskId)
 			}
 		}
 		delete(c.reduceTasks.tasks, worker)
 	}
-}
-
-// Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
 }
 
 func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
@@ -111,7 +102,7 @@ func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
 	return nil
 }
 
-func (c *Coordinator) findReduceNumber() int {
+func (c *Coordinator) getAvailableReduceId() int {
 	for i, available := range c.reduceIds {
 		if available {
 			c.reduceIds[i] = false
@@ -121,13 +112,14 @@ func (c *Coordinator) findReduceNumber() int {
 	return -1
 }
 
-func (c *Coordinator) resetReduceNumber(i int) {
+func (c *Coordinator) resetReduceId(i int) {
 	c.reduceIds[i] = true
 }
 
-func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) error {
+func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer log.Printf("Status - Map tasks %d/%d | Reduce tasks %d/%d", c.mapTasks.completedTasks, c.mapTasks.totalTasks, c.reduceTasks.completedTasks, c.reduceTasks.totalTasks)
 
 	if c.reduceTasks.completedTasks == c.reduceTasks.totalTasks {
 		reply.Type = DONE
@@ -135,80 +127,92 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *ReqTaskReply) er
 	}
 
 	if c.mapTasks.completedTasks < c.mapTasks.totalTasks {
-		for file, available := range c.files {
-			if available {
-				reply.Type = MAP
-				reply.MapTask = MapArgs{
-					File:       file,
-					Partitions: c.reduceTasks.totalTasks,
-					WorkerId:   args.WorkerId,
-					TaskId:     c.mapTasks.idCounter,
-				}
-				c.files[file] = false
-
-				if _, ok := c.mapTasks.tasks[args.WorkerId]; !ok {
-					c.mapTasks.tasks[args.WorkerId] = make(map[int]MapTask)
-				}
-
-				c.mapTasks.tasks[args.WorkerId][c.mapTasks.idCounter] = MapTask{
-					state: INPROGRESS,
-					file:  file,
-					id:    c.mapTasks.idCounter,
-				}
-				c.mapTasks.idCounter++
-				return nil
-			}
+		success := c.tryCreateMapTask(reply, args)
+		if !success {
+			reply.Type = WAIT
 		}
-		log.Printf("RequestTask: no files available because all files are in progress")
-		reply.Type = WAIT
 		return nil
 	}
 
 	if c.reduceTasks.completedTasks < c.reduceTasks.totalTasks {
-		reduceNumber := c.findReduceNumber()
-		if reduceNumber == -1 {
+		success := c.tryCreateReduceTask(reply, args)
+		if !success {
 			reply.Type = WAIT
-			return nil
-		}
-		fileKeys := make([]string, c.mapTasks.totalTasks)
-		i := 0
-		for workerId := range c.mapTasks.tasks {
-			for _, task := range c.mapTasks.tasks[workerId] {
-				id := task.id
-				fileKeys[i] = strconv.Itoa(id)
-				i++
-			}
-		}
-		reply.Type = REDUCE
-		reply.ReduceTask = ReduceArgs{
-			Partitions:   c.reduceTasks.totalTasks,
-			WorkerIds:    fileKeys,
-			ReduceNumber: reduceNumber,
-			WorkerId:     args.WorkerId,
-		}
-
-		if _, ok := c.reduceTasks.tasks[args.WorkerId]; !ok {
-			c.reduceTasks.tasks[args.WorkerId] = make(map[int]ReduceTask)
-		}
-
-		c.reduceTasks.tasks[args.WorkerId][reduceNumber] = ReduceTask{
-			state:   INPROGRESS,
-			fileKey: reduceNumber,
 		}
 		return nil
 	}
 
-	log.Println("RequestTask: Don't think this should happen")
-	reply.Type = WAIT
+	log.Panicln("This should never happen")
 	return nil
+}
+
+func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
+	for file, available := range c.files {
+		if available {
+			reply.Type = MAP
+			reply.MapTask = MapArgs{
+				File:       file,
+				Partitions: c.reduceTasks.totalTasks,
+				WorkerId:   args.WorkerId,
+				TaskId:     c.mapTasks.idCounter,
+			}
+			c.files[file] = false
+
+			if _, ok := c.mapTasks.tasks[args.WorkerId]; !ok {
+				c.mapTasks.tasks[args.WorkerId] = make(map[int]MapTask)
+			}
+
+			c.mapTasks.tasks[args.WorkerId][c.mapTasks.idCounter] = MapTask{
+				state:     INPROGRESS,
+				file:      file,
+				mapTaskId: c.mapTasks.idCounter,
+			}
+			c.mapTasks.idCounter++
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
+	reduceId := c.getAvailableReduceId()
+	if reduceId == -1 {
+		return false
+	}
+
+	mapIds := make([]MapTaskId, c.mapTasks.totalTasks)
+	i := 0
+	for workerId := range c.mapTasks.tasks {
+		for _, task := range c.mapTasks.tasks[workerId] {
+			mapIds[i] = task.mapTaskId
+			i++
+		}
+	}
+	reply.Type = REDUCE
+	reply.ReduceTask = ReduceArgs{
+		Partitions: c.reduceTasks.totalTasks,
+		MapIds:     mapIds,
+		ReduceId:   reduceId,
+		WorkerId:   args.WorkerId,
+	}
+
+	if _, ok := c.reduceTasks.tasks[args.WorkerId]; !ok {
+		c.reduceTasks.tasks[args.WorkerId] = make(map[ReduceTaskId]ReduceTask)
+	}
+
+	c.reduceTasks.tasks[args.WorkerId][reduceId] = ReduceTask{
+		state:  INPROGRESS,
+		taskId: reduceId,
+	}
+	return true
 }
 
 func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	task := c.reduceTasks.tasks[args.WorkerId][args.ReduceNumber]
+	task := c.reduceTasks.tasks[args.WorkerId][args.TaskId]
 	task.state = COMPLETED
-	c.reduceTasks.tasks[args.WorkerId][args.ReduceNumber] = task
+	c.reduceTasks.tasks[args.WorkerId][args.TaskId] = task
 	c.reduceTasks.completedTasks++
 	return nil
 }
@@ -218,7 +222,7 @@ func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) err
 	return nil
 }
 
-func (c *Coordinator) pingWorker(sockname string, workerId string) {
+func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
 	for {
 		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
 		if !ok {
@@ -267,12 +271,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	c := Coordinator{
 		mapTasks: MapTasks{
-			tasks:          make(map[string]map[int]MapTask),
+			tasks:          make(map[WorkerId]map[MapTaskId]MapTask),
 			completedTasks: 0,
 			totalTasks:     len(files),
 		},
 		reduceTasks: ReduceTasks{
-			tasks:          make(map[string]map[int]ReduceTask),
+			tasks:          make(map[WorkerId]map[ReduceTaskId]ReduceTask),
 			completedTasks: 0,
 			totalTasks:     nReduce,
 		},

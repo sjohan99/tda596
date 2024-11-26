@@ -15,30 +15,8 @@ import (
 	"time"
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
-type RequestTaskArgs struct {
-	WorkerId string
-}
-
-type RequestTaskReply struct {
-	Type         string // "map" or "reduce" or "wait" or "done"
-	Split        string
-	R            int
-	MapNumber    uint32
-	FileNumbers  []int
-	ReduceNumber int
+type ReqTaskArgs struct {
+	WorkerId WorkerId
 }
 
 type ReqTaskReply struct {
@@ -48,32 +26,32 @@ type ReqTaskReply struct {
 }
 
 type MapArgs struct {
-	File       string // File to read from
-	Partitions int    // How many partitions to split the file into
-	WorkerId   string // File key to use for intermediate files
-	TaskId     int
+	File       string   // File to read from
+	Partitions int      // How many partitions to split the file into
+	WorkerId   WorkerId // File key to use for intermediate files
+	TaskId     MapTaskId
 }
 
 type ReduceArgs struct {
-	Partitions   int
-	WorkerIds    []string // mr-<WorkerId>-<0..Partitions>
-	ReduceNumber int      // for output file -> mr-out-ReduceNumber
-	WorkerId     string
+	Partitions int
+	MapIds     []MapTaskId  // mr-<MapId>-<0..Partitions>
+	ReduceId   ReduceTaskId // for output file -> mr-out-ReduceId
+	WorkerId   WorkerId
 }
 
 type ReduceFinishedArgs struct {
-	WorkerId     string
-	ReduceNumber int
+	WorkerId WorkerId
+	TaskId   ReduceTaskId
 }
 
 type RegisterWorkerArgs struct {
 	Sockname string
-	WorkerId string
+	WorkerId WorkerId
 }
 
 type MapFinishedArgs struct {
 	WorkerId string
-	TaskId   int
+	TaskId   MapTaskId
 }
 
 type Empty struct{}
@@ -85,7 +63,7 @@ type Empty struct{}
 // Can't use the current directory since
 // Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
-	s := "/var/tmp/5840-mr-coordinator-"
+	s := "/var/tmp/5840-mr-"
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
@@ -142,12 +120,4 @@ func callWorker(sockname, rpcname string, args interface{}, reply interface{}) b
 	}
 
 	return true
-
-	// err = c.Call(rpcname, args, reply)
-	// if err == nil {
-	// 	return true
-	// }
-
-	// fmt.Println(err)
-	// return false
 }
