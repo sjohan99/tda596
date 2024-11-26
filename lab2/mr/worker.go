@@ -26,30 +26,12 @@ type KeyValue struct {
 	Value string
 }
 
-func (c *WorkerRPC) Ping(args *Empty, reply *Empty) error {
-	return nil
-}
-
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
-}
-
-func initWorker() string {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	workerRPC := new(WorkerRPC)
-	sockname, id := workerRPC.server()
-
-	args := RegisterWorkerArgs{sockname, id}
-
-	ok := call("Coordinator.RegisterWorker", &args, &Empty{})
-	if !ok {
-		log.Fatalf("failed to do task")
-	}
-	return id
 }
 
 // main/mrworker.go calls this function.
@@ -201,6 +183,20 @@ func decodeFile(filename string) []KeyValue {
 	return kvs
 }
 
+func initWorker() string {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	workerRPC := new(WorkerRPC)
+	sockname, id := workerRPC.server()
+
+	args := RegisterWorkerArgs{sockname, id}
+
+	ok := call("Coordinator.RegisterWorker", &args, &Empty{})
+	if !ok {
+		log.Fatalf("failed to do task")
+	}
+	return id
+}
+
 func (w *WorkerRPC) server() (string, string) {
 	rpc.Register(w)
 	rpc.HandleHTTP()
@@ -212,4 +208,8 @@ func (w *WorkerRPC) server() (string, string) {
 	}
 	go http.Serve(l, nil)
 	return sockname, id
+}
+
+func (c *WorkerRPC) Ping(args *Empty, reply *Empty) error {
+	return nil
 }

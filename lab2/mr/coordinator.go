@@ -64,58 +64,6 @@ type ReduceTask struct {
 	taskId ReduceTaskId // in an intermediate file: mr-mapId-<fileKey>
 }
 
-func (c *Coordinator) resetTask(worker string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tasks, ok := c.mapTasks.tasks[worker]
-	if ok {
-		for _, task := range tasks {
-			if task.state == COMPLETED {
-				c.mapTasks.completedTasks--
-				// TODO notify reduce workers
-			}
-			c.files[task.file] = true
-		}
-		delete(c.mapTasks.tasks, worker)
-	}
-
-	reduceTasks, ok := c.reduceTasks.tasks[worker]
-	if ok {
-		for _, reduceTask := range reduceTasks {
-			if reduceTask.state == INPROGRESS {
-				c.resetReduceId(reduceTask.taskId)
-			}
-		}
-		delete(c.reduceTasks.tasks, worker)
-	}
-}
-
-func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	tasks := c.mapTasks.tasks[args.WorkerId]
-	task := tasks[args.TaskId]
-	task.state = COMPLETED
-	c.mapTasks.tasks[args.WorkerId][args.TaskId] = task
-	c.mapTasks.completedTasks++
-	return nil
-}
-
-func (c *Coordinator) getAvailableReduceId() int {
-	for i, available := range c.reduceIds {
-		if available {
-			c.reduceIds[i] = false
-			return i
-		}
-	}
-	return -1
-}
-
-func (c *Coordinator) resetReduceId(i int) {
-	c.reduceIds[i] = true
-}
-
 func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -144,6 +92,71 @@ func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error 
 
 	log.Panicln("This should never happen")
 	return nil
+}
+
+func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tasks := c.mapTasks.tasks[args.WorkerId]
+	task := tasks[args.TaskId]
+	task.state = COMPLETED
+	c.mapTasks.tasks[args.WorkerId][args.TaskId] = task
+	c.mapTasks.completedTasks++
+	return nil
+}
+
+func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	task := c.reduceTasks.tasks[args.WorkerId][args.TaskId]
+	task.state = COMPLETED
+	c.reduceTasks.tasks[args.WorkerId][args.TaskId] = task
+	c.reduceTasks.completedTasks++
+	return nil
+}
+
+func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
+	go c.pingWorker(args.Sockname, args.WorkerId)
+	return nil
+}
+
+func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
+	for {
+		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
+		if !ok {
+			log.Println("failed to ping worker")
+			c.resetTask(workerId)
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func (c *Coordinator) resetTask(worker string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tasks, ok := c.mapTasks.tasks[worker]
+	if ok {
+		for _, task := range tasks {
+			if task.state == COMPLETED {
+				c.mapTasks.completedTasks--
+				// TODO notify reduce workers
+			}
+			c.files[task.file] = true
+		}
+		delete(c.mapTasks.tasks, worker)
+	}
+
+	reduceTasks, ok := c.reduceTasks.tasks[worker]
+	if ok {
+		for _, reduceTask := range reduceTasks {
+			if reduceTask.state == INPROGRESS {
+				c.resetReduceTaskId(reduceTask.taskId)
+			}
+		}
+		delete(c.reduceTasks.tasks, worker)
+	}
 }
 
 func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
@@ -175,7 +188,7 @@ func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (
 }
 
 func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
-	reduceId := c.getAvailableReduceId()
+	reduceId := c.getAvailableReduceTaskId()
 	if reduceId == -1 {
 		return false
 	}
@@ -207,31 +220,18 @@ func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs
 	return true
 }
 
-func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	task := c.reduceTasks.tasks[args.WorkerId][args.TaskId]
-	task.state = COMPLETED
-	c.reduceTasks.tasks[args.WorkerId][args.TaskId] = task
-	c.reduceTasks.completedTasks++
-	return nil
-}
-
-func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
-	go c.pingWorker(args.Sockname, args.WorkerId)
-	return nil
-}
-
-func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
-	for {
-		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
-		if !ok {
-			log.Println("failed to ping worker")
-			c.resetTask(workerId)
-			break
+func (c *Coordinator) getAvailableReduceTaskId() int {
+	for i, available := range c.reduceIds {
+		if available {
+			c.reduceIds[i] = false
+			return i
 		}
-		time.Sleep(10 * time.Second)
 	}
+	return -1
+}
+
+func (c *Coordinator) resetReduceTaskId(i int) {
+	c.reduceIds[i] = true
 }
 
 // start a thread that listens for RPCs from worker.go
