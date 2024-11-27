@@ -35,6 +35,8 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
+//
+// Request tasks from the coordinator repeatedly until all tasks are done.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	id := initWorker()
@@ -59,6 +61,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 }
 
+// Perform the reduce task and write the output file.
 func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	tempfile, err := ioutil.TempFile("", "mr-out-temp-*")
 	if err != nil {
@@ -109,6 +112,7 @@ func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	}
 }
 
+// Perform the map task and write the intermediate files.
 func workerMap(args MapArgs, mapf func(string, string) []KeyValue) {
 	content := readFile(args.File)
 	kvs := mapf(args.File, content)
@@ -149,6 +153,7 @@ func readFile(filename string) string {
 	return string(content)
 }
 
+// Encode each key-value pair as json objects into a file named mr-<MapId>-<ReduceId>
 func encodeFile(mapId MapTaskId, reduceId ReduceTaskId, kvs []KeyValue) string {
 	intermediateFilename := fmt.Sprintf("mr-%d-%d", mapId, reduceId)
 	intermediateFile, err := os.Create(intermediateFilename)
@@ -165,6 +170,7 @@ func encodeFile(mapId MapTaskId, reduceId ReduceTaskId, kvs []KeyValue) string {
 	return intermediateFilename
 }
 
+// Decode json objects from a file and return a slice of KeyValue
 func decodeFile(filename string) []KeyValue {
 	intermediateFile, err := os.Open(filename)
 	if err != nil {
@@ -183,6 +189,7 @@ func decodeFile(filename string) []KeyValue {
 	return kvs
 }
 
+// Listen for RPCs from the coordinator. This is only used to respond to pings.
 func initWorker() string {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	workerRPC := new(WorkerRPC)

@@ -13,8 +13,7 @@ import (
 type TaskState int
 
 const (
-	IDLE TaskState = iota
-	INPROGRESS
+	INPROGRESS TaskState = iota
 	COMPLETED
 )
 
@@ -27,24 +26,35 @@ const (
 	DONE
 )
 
-type Available bool
+const (
+	AVAILABLE   IsAvailable = true
+	UNAVAILABLE IsAvailable = false
+)
+
+type IsAvailable bool
+
+// Used to uniquely identify intermediate files and output files
+// Intermediate files are named as "mr-<MapTaskId>-<ReduceTaskId>"
+// Output files are named as "mr-out-<ReduceTaskId>"
 type MapTaskId = int
 type ReduceTaskId = int
+
+// Used to uniquely identify workers
 type WorkerId = string
 
 type Coordinator struct {
 	mu          sync.Mutex
 	mapTasks    MapTasks
 	reduceTasks ReduceTasks
-	files       map[string]Available
-	reduceIds   map[ReduceTaskId]Available
+	files       map[string]IsAvailable
+	reduceIds   map[ReduceTaskId]IsAvailable
 }
 
 type MapTasks struct {
 	tasks          map[WorkerId]map[MapTaskId]MapTask
 	completedTasks int
 	totalTasks     int
-	idCounter      MapTaskId
+	idCounter      MapTaskId // Used to assign unique ids to map tasks, increment by 1 for each new task
 }
 
 type ReduceTasks struct {
@@ -54,57 +64,52 @@ type ReduceTasks struct {
 }
 
 type MapTask struct {
-	state     TaskState
-	file      string
-	mapTaskId MapTaskId
+	state TaskState
+	file  string
 }
 
 type ReduceTask struct {
-	state  TaskState
-	taskId ReduceTaskId // in an intermediate file: mr-mapId-<fileKey>
+	state TaskState
 }
 
+// Request a map or reduce task from the Coordinator. If there are no idle tasks the
+// worker will be asked to wait.
+// If all tasks are completed, the worker will be notified that the job is done.
 func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer log.Printf("Status - Map tasks %d/%d | Reduce tasks %d/%d", c.mapTasks.completedTasks, c.mapTasks.totalTasks, c.reduceTasks.completedTasks, c.reduceTasks.totalTasks)
 
-	if c.reduceTasks.completedTasks == c.reduceTasks.totalTasks {
+	switch {
+	case c.reduceTasks.completedTasks == c.reduceTasks.totalTasks:
 		reply.Type = DONE
-		return nil
-	}
-
-	if c.mapTasks.completedTasks < c.mapTasks.totalTasks {
+	case c.mapTasks.completedTasks < c.mapTasks.totalTasks:
 		success := c.tryCreateMapTask(reply, args)
-		if !success {
+		if !success { // No idle map tasks but need to wait for all map tasks to complete
 			reply.Type = WAIT
 		}
-		return nil
-	}
-
-	if c.reduceTasks.completedTasks < c.reduceTasks.totalTasks {
+	case c.reduceTasks.completedTasks < c.reduceTasks.totalTasks:
 		success := c.tryCreateReduceTask(reply, args)
-		if !success {
+		if !success { // No idle reduce tasks but need to wait for all reduce tasks to complete
 			reply.Type = WAIT
 		}
-		return nil
 	}
 
-	log.Panicln("This should never happen")
 	return nil
 }
 
+// Mark task as completed and increment map completedTasks counter
 func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tasks := c.mapTasks.tasks[args.WorkerId]
-	task := tasks[args.TaskId]
+	task := c.mapTasks.tasks[args.WorkerId][args.TaskId]
 	task.state = COMPLETED
 	c.mapTasks.tasks[args.WorkerId][args.TaskId] = task
 	c.mapTasks.completedTasks++
 	return nil
 }
 
+// Mark task as completed and increment reduce completedTasks counter
 func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -115,11 +120,14 @@ func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error
 	return nil
 }
 
+// Register worker by starting a goroutine to ping the worker every 10 seconds
 func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
 	go c.pingWorker(args.Sockname, args.WorkerId)
 	return nil
 }
 
+// Ping worker every 10 seconds to check if it is still alive
+// If worker is not alive, reset tasks assigned to the worker if necessary
 func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
 	for {
 		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
@@ -132,6 +140,11 @@ func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
 	}
 }
 
+// Resets tasks assigned to the worker
+//
+// Map tasks are always completely reset.
+// Reduce tasks are reset only if they are in progress.
+// Completed reduce tasks are not reset.
 func (c *Coordinator) resetTask(worker string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -143,22 +156,28 @@ func (c *Coordinator) resetTask(worker string) {
 				c.mapTasks.completedTasks--
 				// TODO notify reduce workers
 			}
-			c.files[task.file] = true
+			c.files[task.file] = AVAILABLE
 		}
 		delete(c.mapTasks.tasks, worker)
 	}
 
 	reduceTasks, ok := c.reduceTasks.tasks[worker]
 	if ok {
-		for _, reduceTask := range reduceTasks {
+		for reduceTaskId, reduceTask := range reduceTasks {
 			if reduceTask.state == INPROGRESS {
-				c.resetReduceTaskId(reduceTask.taskId)
+				c.resetReduceTaskId(reduceTaskId)
 			}
 		}
 		delete(c.reduceTasks.tasks, worker)
 	}
 }
 
+// Tries to create a map task for the worker, returns true if successful, false otherwise.
+//
+// A successful attempt will update the Coordinator's state with the new map task
+// and fills in the reply with the map task details.
+//
+// An unsuccessful map task creation happens when there are no idle map tasks.
 func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
 	for file, available := range c.files {
 		if available {
@@ -169,16 +188,15 @@ func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (
 				WorkerId:   args.WorkerId,
 				TaskId:     c.mapTasks.idCounter,
 			}
-			c.files[file] = false
+			c.files[file] = UNAVAILABLE
 
 			if _, ok := c.mapTasks.tasks[args.WorkerId]; !ok {
 				c.mapTasks.tasks[args.WorkerId] = make(map[int]MapTask)
 			}
 
 			c.mapTasks.tasks[args.WorkerId][c.mapTasks.idCounter] = MapTask{
-				state:     INPROGRESS,
-				file:      file,
-				mapTaskId: c.mapTasks.idCounter,
+				state: INPROGRESS,
+				file:  file,
 			}
 			c.mapTasks.idCounter++
 			return true
@@ -187,6 +205,12 @@ func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (
 	return false
 }
 
+// Tries to create a reduce task for the worker, returns true if successful, false otherwise.
+//
+// A successful attempt will update the Coordinator's state with the new reduce task
+// and fills in the reply with the reduce task details.
+//
+// An unsuccessful attempt happens when there are no idle reduce tasks.
 func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs) (success bool) {
 	reduceId := c.getAvailableReduceTaskId()
 	if reduceId == -1 {
@@ -196,8 +220,8 @@ func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs
 	mapIds := make([]MapTaskId, c.mapTasks.totalTasks)
 	i := 0
 	for workerId := range c.mapTasks.tasks {
-		for _, task := range c.mapTasks.tasks[workerId] {
-			mapIds[i] = task.mapTaskId
+		for mapTaskId := range c.mapTasks.tasks[workerId] {
+			mapIds[i] = mapTaskId
 			i++
 		}
 	}
@@ -214,8 +238,7 @@ func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs
 	}
 
 	c.reduceTasks.tasks[args.WorkerId][reduceId] = ReduceTask{
-		state:  INPROGRESS,
-		taskId: reduceId,
+		state: INPROGRESS,
 	}
 	return true
 }
@@ -223,7 +246,7 @@ func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs
 func (c *Coordinator) getAvailableReduceTaskId() int {
 	for i, available := range c.reduceIds {
 		if available {
-			c.reduceIds[i] = false
+			c.reduceIds[i] = UNAVAILABLE
 			return i
 		}
 	}
@@ -231,7 +254,7 @@ func (c *Coordinator) getAvailableReduceTaskId() int {
 }
 
 func (c *Coordinator) resetReduceTaskId(i int) {
-	c.reduceIds[i] = true
+	c.reduceIds[i] = AVAILABLE
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -261,13 +284,13 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	mapFiles := make(map[string]Available)
+	mapFiles := make(map[string]IsAvailable)
 	for _, file := range files {
-		mapFiles[file] = true
+		mapFiles[file] = AVAILABLE
 	}
-	reduceIds := make(map[int]Available)
+	reduceIds := make(map[int]IsAvailable)
 	for i := 0; i < nReduce; i++ {
-		reduceIds[i] = true
+		reduceIds[i] = AVAILABLE
 	}
 	c := Coordinator{
 		mapTasks: MapTasks{
