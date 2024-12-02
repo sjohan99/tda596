@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const TIMEOUT_DURATION = 10 * time.Second
+
 type TaskState int
 
 const (
@@ -72,13 +74,26 @@ type ReduceTask struct {
 	state TaskState
 }
 
+func (c *Coordinator) LogWorkerDistribution() []int {
+	workerTaskCount := make(map[WorkerId]int)
+	for workerId, tasks := range c.mapTasks.tasks {
+		workerTaskCount[workerId] += len(tasks)
+	}
+	wm := make([]int, 0)
+	for _, n := range workerTaskCount {
+		wm = append(wm, n)
+	}
+	return wm
+}
+
 // Request a map or reduce task from the Coordinator. If there are no idle tasks the
 // worker will be asked to wait.
 // If all tasks are completed, the worker will be notified that the job is done.
 func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	defer log.Printf("Status - Map tasks %d/%d | Reduce tasks %d/%d", c.mapTasks.completedTasks, c.mapTasks.totalTasks, c.reduceTasks.completedTasks, c.reduceTasks.totalTasks)
+	defer log.Printf("Status - Map tasks %d/%d | Reduce tasks %d/%d - Distribution %v", c.mapTasks.completedTasks, c.mapTasks.totalTasks, c.reduceTasks.completedTasks, c.reduceTasks.totalTasks, c.LogWorkerDistribution())
+	defer c.LogWorkerDistribution()
 
 	switch {
 	case c.reduceTasks.completedTasks == c.reduceTasks.totalTasks:
@@ -102,7 +117,12 @@ func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error 
 func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	task := c.mapTasks.tasks[args.WorkerId][args.TaskId]
+	tasks, ok := c.mapTasks.tasks[args.WorkerId]
+	if !ok {
+		log.Println("Discarded worker map task finished, workerid:", args.WorkerId)
+		return nil
+	}
+	task := tasks[args.TaskId]
 	task.state = COMPLETED
 	c.mapTasks.tasks[args.WorkerId][args.TaskId] = task
 	c.mapTasks.completedTasks++
@@ -113,31 +133,16 @@ func (c *Coordinator) FinishMap(args *MapFinishedArgs, reply *Empty) error {
 func (c *Coordinator) FinishReduce(args *ReduceFinishedArgs, reply *Empty) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	task := c.reduceTasks.tasks[args.WorkerId][args.TaskId]
+	tasks, ok := c.reduceTasks.tasks[args.WorkerId]
+	if !ok {
+		log.Println("Discarded worker reduce task finished, workerid:", args.WorkerId)
+		return nil
+	}
+	task := tasks[args.TaskId]
 	task.state = COMPLETED
 	c.reduceTasks.tasks[args.WorkerId][args.TaskId] = task
 	c.reduceTasks.completedTasks++
 	return nil
-}
-
-// Register worker by starting a goroutine to ping the worker every 10 seconds
-func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *Empty) error {
-	go c.pingWorker(args.Sockname, args.WorkerId)
-	return nil
-}
-
-// Ping worker every 10 seconds to check if it is still alive
-// If worker is not alive, reset tasks assigned to the worker if necessary
-func (c *Coordinator) pingWorker(sockname string, workerId WorkerId) {
-	for {
-		ok := callWorker(sockname, "WorkerRPC.Ping", &Empty{}, &Empty{})
-		if !ok {
-			log.Println("failed to ping worker")
-			c.resetTask(workerId)
-			break
-		}
-		time.Sleep(10 * time.Second)
-	}
 }
 
 // Resets tasks assigned to the worker
@@ -198,11 +203,28 @@ func (c *Coordinator) tryCreateMapTask(reply *ReqTaskReply, args *ReqTaskArgs) (
 				state: INPROGRESS,
 				file:  file,
 			}
+
+			go c.discardMapIfNotFinishedWithin(args.WorkerId, c.mapTasks.idCounter, TIMEOUT_DURATION)
+
 			c.mapTasks.idCounter++
 			return true
 		}
 	}
 	return false
+}
+
+func (c *Coordinator) discardMapIfNotFinishedWithin(workerId WorkerId, taskId MapTaskId, sleepDuration time.Duration) {
+	time.Sleep(sleepDuration)
+	if c.mapTasks.tasks[workerId][taskId].state != COMPLETED {
+		c.resetTask(workerId)
+	}
+}
+
+func (c *Coordinator) discardReduceIfNotFinishedWithin(workerId WorkerId, taskId MapTaskId, sleepDuration time.Duration) {
+	time.Sleep(sleepDuration)
+	if c.reduceTasks.tasks[workerId][taskId].state != COMPLETED {
+		c.resetTask(workerId)
+	}
 }
 
 // Tries to create a reduce task for the worker, returns true if successful, false otherwise.
@@ -240,6 +262,7 @@ func (c *Coordinator) tryCreateReduceTask(reply *ReqTaskReply, args *ReqTaskArgs
 	c.reduceTasks.tasks[args.WorkerId][reduceId] = ReduceTask{
 		state: INPROGRESS,
 	}
+	go c.discardReduceIfNotFinishedWithin(args.WorkerId, reduceId, TIMEOUT_DURATION)
 	return true
 }
 

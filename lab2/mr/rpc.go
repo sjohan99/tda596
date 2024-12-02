@@ -12,7 +12,6 @@ import (
 	"net/rpc"
 	"os"
 	"strconv"
-	"time"
 )
 
 type ReqTaskArgs struct {
@@ -68,15 +67,6 @@ func coordinatorSock() string {
 	return s
 }
 
-func workerSock() (string, string) {
-	id := strconv.Itoa(os.Getpid())
-	s := "/var/tmp/5840-mr-worker-" + id
-	return s, id
-}
-
-type WorkerRPC struct {
-}
-
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
@@ -96,28 +86,4 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
-}
-
-func callWorker(sockname, rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	c, err := rpc.DialHTTP("unix", sockname)
-	if err != nil {
-		log.Println("Could not dial worker:", err)
-		return false
-	}
-	defer c.Close()
-
-	call := c.Go(rpcname, args, reply, make(chan *rpc.Call, 1))
-	select {
-	case <-time.After(10 * time.Second):
-		log.Println("timeout")
-		return false
-	case resp := <-call.Done:
-		if resp != nil && resp.Error != nil {
-			log.Println(resp.Error)
-			return false
-		}
-	}
-
-	return true
 }

@@ -6,11 +6,9 @@ import (
 	"hash/fnv"
 	"io/ioutil"
 	"log"
-	"net"
-	"net/http"
-	"net/rpc"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -39,7 +37,8 @@ func ihash(key string) int {
 // Request tasks from the coordinator repeatedly until all tasks are done.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	id := initWorker()
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	id := strconv.Itoa(os.Getpid())
 
 	for {
 		args := ReqTaskArgs{id}
@@ -187,36 +186,4 @@ func decodeFile(filename string) []KeyValue {
 		kvs = append(kvs, kv)
 	}
 	return kvs
-}
-
-// Listen for RPCs from the coordinator. This is only used to respond to pings.
-func initWorker() string {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	workerRPC := new(WorkerRPC)
-	sockname, id := workerRPC.server()
-
-	args := RegisterWorkerArgs{sockname, id}
-
-	ok := call("Coordinator.RegisterWorker", &args, &Empty{})
-	if !ok {
-		log.Fatalf("failed to do task")
-	}
-	return id
-}
-
-func (w *WorkerRPC) server() (string, string) {
-	rpc.Register(w)
-	rpc.HandleHTTP()
-	sockname, id := workerSock()
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
-	if e != nil {
-		log.Fatal("listen error:", e)
-	}
-	go http.Serve(l, nil)
-	return sockname, id
-}
-
-func (c *WorkerRPC) Ping(args *Empty, reply *Empty) error {
-	return nil
 }
