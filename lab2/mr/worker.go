@@ -104,7 +104,6 @@ func workerReduce(args ReduceArgs, reducef func(string, []string) string) {
 	// notify the coordinator that the reduce task is done
 	finishedArgs := ReduceFinishedArgs{args.WorkerId, args.ReduceId}
 	reduceFinishedReply := Empty{}
-	time.Sleep(250 * time.Millisecond)
 	ok := call("Coordinator.FinishReduce", &finishedArgs, &reduceFinishedReply)
 	if !ok {
 		log.Fatalf("Coordinator.FinishReduce failed")

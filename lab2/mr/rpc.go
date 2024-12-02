@@ -43,11 +43,6 @@ type ReduceFinishedArgs struct {
 	TaskId   ReduceTaskId
 }
 
-type RegisterWorkerArgs struct {
-	Sockname string
-	WorkerId WorkerId
-}
-
 type MapFinishedArgs struct {
 	WorkerId string
 	TaskId   MapTaskId

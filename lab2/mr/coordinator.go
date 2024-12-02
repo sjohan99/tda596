@@ -93,7 +93,6 @@ func (c *Coordinator) RequestTask(args *ReqTaskArgs, reply *ReqTaskReply) error 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer log.Printf("Status - Map tasks %d/%d | Reduce tasks %d/%d - Distribution %v", c.mapTasks.completedTasks, c.mapTasks.totalTasks, c.reduceTasks.completedTasks, c.reduceTasks.totalTasks, c.LogWorkerDistribution())
-	defer c.LogWorkerDistribution()
 
 	switch {
 	case c.reduceTasks.completedTasks == c.reduceTasks.totalTasks:
@@ -159,7 +158,6 @@ func (c *Coordinator) resetTask(worker string) {
 		for _, task := range tasks {
 			if task.state == COMPLETED {
 				c.mapTasks.completedTasks--
-				// TODO notify reduce workers
 			}
 			c.files[task.file] = AVAILABLE
 		}
