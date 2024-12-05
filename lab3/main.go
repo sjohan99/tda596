@@ -1,17 +1,34 @@
 package main
 
 import (
+	"bufio"
 	"chord/argparser"
-	"chord/rpc"
-	"strconv"
+	"fmt"
+	"log"
+	"os"
 )
 
 func main() {
 	config := argparser.ParseArguments()
-	rpcServer := rpc.RPCNode{}
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	if config.Initialization == argparser.CREATE {
-		rpcServer.StartServer(config.Address, strconv.Itoa(config.Port))
+		n := createNode(config)
+		go n.StartServer(n.IP, n.Port)
+		for {
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("Enter text: ")
+			reader.ReadString('\n')
+			fmt.Printf("Node: %+v\n", n)
+		}
+
 	} else {
-		rpcServer.PingServer(config.JoinAddress, strconv.Itoa(config.JoinPort))
+		n := joinNode(config)
+		//go n.StartServer(n.IP, n.Port)
+		for {
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("Enter text: ")
+			reader.ReadString('\n')
+			fmt.Printf("Node: %+v\n", n)
+		}
 	}
 }

@@ -26,7 +26,7 @@ type Config struct {
 	FixFingersInterval       time.Duration  // tff | The time between invocations of 'fix fingers'.
 	CheckPredecessorInterval time.Duration  // tcp | The time between invocations of 'check predecessor'.
 	Successors               int            // r | The number of successors maintained by the Chord client.
-	Id                       string         // i | The identifier (ID) assigned to the Chord client.
+	Id                       []byte         // i | The identifier (ID) assigned to the Chord client.
 	Initialization           Initialization // Whether the client is creating a new ring or joining an existing one.
 }
 
@@ -77,7 +77,7 @@ func withinBounds(flagName string, flagValue int, lowerBound int, upperBound int
 	}
 }
 
-func verifyOrCreateId(iFlag *string, aFlag *string, pFlag *int) string {
+func verifyOrCreateId(iFlag *string, aFlag *string, pFlag *int) []byte {
 	if *iFlag != "" {
 		matched, err := regexp.MatchString("^[0-9a-fA-F]{40}$", *iFlag)
 		if err != nil {
@@ -89,17 +89,16 @@ func verifyOrCreateId(iFlag *string, aFlag *string, pFlag *int) string {
 			flag.Usage()
 			os.Exit(1)
 		}
-		return *iFlag
+		return []byte(*iFlag)
 	}
 	return createIdHash(aFlag, pFlag)
 }
 
-func createIdHash(aFlag *string, pFlag *int) string {
+func createIdHash(aFlag *string, pFlag *int) []byte {
 	hasher := sha1.New()
 	sum := fmt.Sprintf("%s:%d", *aFlag, *pFlag)
 	hasher.Write([]byte(sum))
-	id := fmt.Sprintf("%x", hasher.Sum(nil))
-	return id
+	return hasher.Sum(nil)
 }
 
 func ParseArguments() Config {
@@ -133,5 +132,6 @@ func ParseArguments() Config {
 		Id:                       id,
 		Initialization:           initialization,
 	}
+	fmt.Printf("Config: %+v\n", config)
 	return config
 }
