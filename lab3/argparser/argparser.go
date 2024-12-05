@@ -1,4 +1,4 @@
-package cli
+package argparser
 
 import (
 	"crypto/sha1"
@@ -10,21 +10,29 @@ import (
 	"time"
 )
 
+type Initialization = int
+
+const (
+	CREATE Initialization = iota
+	JOIN
+)
+
 type Config struct {
-	Address                  string        // a | The IP address that the Chord client will bind to, as well as advertise to other nodes.
-	Port                     int           // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
-	JoinAddress              string        // ja | The IP address of the machine running a Chord node. The Chord client will join this node's ring. Empty string if unspecified.
-	JoinPort                 int           // jp | The port that an existing Chord node is bound to and listening on. 0 if unspecified.
-	StabilizeInterval        time.Duration // ts | The time between invocations of 'stabilize'.
-	FixFingersInterval       time.Duration // tff | The time between invocations of 'fix fingers'.
-	CheckPredecessorInterval time.Duration // tcp | The time between invocations of 'check predecessor'.
-	Successors               int           // r | The number of successors maintained by the Chord client.
-	Id                       string        // i | The identifier (ID) assigned to the Chord client.
+	Address                  string         // a | The IP address that the Chord client will bind to, as well as advertise to other nodes.
+	Port                     int            // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
+	JoinAddress              string         // ja | The IP address of the machine running a Chord node. The Chord client will join this node's ring. Empty string if unspecified.
+	JoinPort                 int            // jp | The port that an existing Chord node is bound to and listening on. 0 if unspecified.
+	StabilizeInterval        time.Duration  // ts | The time between invocations of 'stabilize'.
+	FixFingersInterval       time.Duration  // tff | The time between invocations of 'fix fingers'.
+	CheckPredecessorInterval time.Duration  // tcp | The time between invocations of 'check predecessor'.
+	Successors               int            // r | The number of successors maintained by the Chord client.
+	Id                       string         // i | The identifier (ID) assigned to the Chord client.
+	Initialization           Initialization // Whether the client is creating a new ring or joining an existing one.
 }
 
 var requiredArgs = []string{"a", "p", "ts", "tff", "tcp", "r"}
 
-func verifyFlagPrecenses() {
+func verifyFlagPrecenses() Initialization {
 	jaFlagPresent := false
 	jpFlagPresent := false
 	requiredFlagsThatAreSet := make([]string, 0)
@@ -54,6 +62,11 @@ func verifyFlagPrecenses() {
 		flag.Usage()
 		os.Exit(1)
 	}
+
+	if jaFlagPresent {
+		return JOIN
+	}
+	return CREATE
 }
 
 func withinBounds(flagName string, flagValue int, lowerBound int, upperBound int) {
@@ -101,7 +114,7 @@ func ParseArguments() Config {
 	iFlag := flag.String("i", "", "The identifier (ID) assigned to the Chord client which will override the ID computed by the SHA1 sum of the client's IP address and port number. Represented as a string of 40 characters matching [0-9a-fA-F]. Optional parameter.")
 	flag.Parse()
 
-	verifyFlagPrecenses()
+	initialization := verifyFlagPrecenses()
 	withinBounds("ts", *tsFlag, 1, 60000)
 	withinBounds("tff", *tffFlag, 1, 60000)
 	withinBounds("tcp", *tcpFlag, 1, 60000)
@@ -118,6 +131,7 @@ func ParseArguments() Config {
 		CheckPredecessorInterval: time.Duration(*tcpFlag) * time.Millisecond,
 		Successors:               *rFlag,
 		Id:                       id,
+		Initialization:           initialization,
 	}
 	return config
 }
