@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"chord/argparser"
 	"fmt"
+	"io"
 	"log"
 	"os"
 )
@@ -11,24 +12,18 @@ import (
 func main() {
 	config := argparser.ParseArguments()
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	log.SetOutput(io.Discard)
+	var n Node
 	if config.Initialization == argparser.CREATE {
-		n := createNode(config)
-		go n.StartServer(n.IP, n.Port)
-		for {
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Enter text: ")
-			reader.ReadString('\n')
-			fmt.Printf("Node: %+v\n", n)
-		}
-
+		n = createNode(config)
 	} else {
-		n := joinNode(config)
-		//go n.StartServer(n.IP, n.Port)
-		for {
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Enter text: ")
-			reader.ReadString('\n')
-			fmt.Printf("Node: %+v\n", n)
-		}
+		n = joinNode(config)
+	}
+	n.Start(config)
+	for {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("Enter text: ")
+		reader.ReadString('\n')
+		n.PrintState()
 	}
 }

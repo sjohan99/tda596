@@ -22,6 +22,7 @@ type Config struct {
 	Port                     int            // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
 	JoinAddress              string         // ja | The IP address of the machine running a Chord node. The Chord client will join this node's ring. Empty string if unspecified.
 	JoinPort                 int            // jp | The port that an existing Chord node is bound to and listening on. 0 if unspecified.
+	JoinId                   []byte         // The identifier (ID) assigned to the Chord node that the Chord client will join.
 	StabilizeInterval        time.Duration  // ts | The time between invocations of 'stabilize'.
 	FixFingersInterval       time.Duration  // tff | The time between invocations of 'fix fingers'.
 	CheckPredecessorInterval time.Duration  // tcp | The time between invocations of 'check predecessor'.
@@ -119,12 +120,14 @@ func ParseArguments() Config {
 	withinBounds("tcp", *tcpFlag, 1, 60000)
 	withinBounds("r", *rFlag, 1, 32)
 	id := verifyOrCreateId(iFlag, aFlag, pFlag)
+	joinId := createIdHash(jaFlag, jpFlag)
 
 	config := Config{
 		Address:                  *aFlag,
 		Port:                     *pFlag,
 		JoinAddress:              *jaFlag,
 		JoinPort:                 *jpFlag,
+		JoinId:                   joinId,
 		StabilizeInterval:        time.Duration(*tsFlag) * time.Millisecond,
 		FixFingersInterval:       time.Duration(*tffFlag) * time.Millisecond,
 		CheckPredecessorInterval: time.Duration(*tcpFlag) * time.Millisecond,
@@ -132,6 +135,5 @@ func ParseArguments() Config {
 		Id:                       id,
 		Initialization:           initialization,
 	}
-	fmt.Printf("Config: %+v\n", config)
 	return config
 }
