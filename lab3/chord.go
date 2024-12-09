@@ -53,14 +53,15 @@ func createNode(c argparser.Config) Node {
 func joinNode(c argparser.Config) Node {
 	n := createNode(c)
 	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: getIdFromHash(c.JoinId, m)}
-	log.Printf("Joining node: %+v\n", n)
-	reply, err := callGetSuccessorList(np)
+
+	reply, err := callFindSuccessor(np, &n.Id)
 	if err != nil {
 		log.Fatal("failed to join ring:", err)
 	}
-	successors := *reply // [1,2,3,4,5]
-	successors = append([]NodeAddress{np}, successors[:len(successors)-1]...)
-	n.Successors = successors
+	for i := range n.Successors {
+		n.Successors[i] = *reply
+	}
+	log.Printf("Joining node: %+v\n", n)
 
 	for i := 1; i <= n.M; i++ {
 		n.fixFingers()
@@ -148,7 +149,7 @@ func (n *Node) fixFingers() {
 		next = 1
 	}
 	n.Next = next
-	id := n.Id + pow(2, next-1)%pow(2, n.M)
+	id := (n.Id + pow(2, next-1)) % pow(2, n.M)
 	reply := new(NodeAddress)
 	// TODO should handle error?
 	n.FindSuccessor(&id, reply)
@@ -157,33 +158,31 @@ func (n *Node) fixFingers() {
 
 func (n *Node) closestPrecedingNode(id int) NodeAddress {
 	// Check finger table
+
+	closest := n.createAddress()
+	currentDistance := func() int {
+		return CounterClockwiseDistance(closest.Id, id, n.M)
+	}
+
 	for i := n.M; i >= 1; i-- {
 		fid := n.FingerTable[i].Id
-		// TODO is fid < id correct?
-		if fid > n.Id && fid < id {
-			return n.FingerTable[i]
+		if CounterClockwiseDistance(fid, id, n.M) < currentDistance() {
+			closest = n.FingerTable[i]
 		}
 	}
 
-	closest := n.FingerTable[n.M]
-	// Check successors
 	for _, succ := range n.Successors {
-		if succ.Id > closest.Id && succ.Id < id {
+		if CounterClockwiseDistance(succ.Id, id, n.M) < currentDistance() {
 			closest = succ
 		}
 	}
-
-	// TODO check correctness
-	if closest == n.FingerTable[n.M] {
-		return n.createAddress()
-	}
-
 	return closest
 }
 
 func (n *Node) stabilize() {
 	for _, succ := range n.Successors {
 		successorList, err := callGetSuccessorList(succ)
+		log.Printf("Received successor list: %+v\n", *successorList)
 		if err != nil {
 			log.Printf("failed to stabilize with successor: %+v\n", succ)
 			continue
@@ -196,11 +195,15 @@ func (n *Node) stabilize() {
 
 		newSuccessors := []NodeAddress{}
 
-		if predecessorNotNil(*predecessor) { // is predecessor between n and succ?
-			if predecessor.Id > n.Id && predecessor.Id < succ.Id {
-				newSuccessors = append(newSuccessors, *predecessor)
-			} else if succ.Id == n.Id {
+		predecessorArcLength := CounterClockwiseDistance(predecessor.Id, n.Id, n.M)
+		succArcLength := CounterClockwiseDistance(succ.Id, n.Id, n.M)
 
+		if predecessorNotNil(*predecessor) {
+			if predecessorArcLength != 0 && predecessorArcLength < succArcLength { // is predecessor between n and succ?
+				log.Printf("Adding predecessor to new successor list, distances: p%d < s%d\n", predecessorArcLength, succArcLength)
+				newSuccessors = append(newSuccessors, *predecessor)
+			} else if succ.Id == n.Id { // TODO: why do we need this?
+				log.Printf("Adding predecessor to new successor list succ.Id == n.Id\n")
 				newSuccessors = append(newSuccessors, *predecessor)
 			}
 		}
