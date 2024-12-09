@@ -63,7 +63,6 @@ func joinNode(c argparser.Config) Node {
 	n.Successors = successors
 
 	for i := 1; i <= n.M; i++ {
-		log.Printf("Fixing Finger %d:", i)
 		n.fixFingers()
 	}
 	log.Printf("Joined node: %+v\n", n)
@@ -101,9 +100,9 @@ func (n *Node) GetSuccessorList(_ *struct{}, reply *[]NodeAddress) error {
 	return nil
 }
 
-func (n *Node) Notify(node *NodeAddress, _ *struct{}) error {
-	if predecessorNotNil(n.Predecessor) || (node.Id > n.Predecessor.Id && node.Id < n.Id) {
-		n.Predecessor = *node
+func (n *Node) Notify(potentialPredecessor *NodeAddress, _ *struct{}) error {
+	if n.shouldChangePredecessor(*potentialPredecessor) {
+		n.Predecessor = *potentialPredecessor
 	}
 	return nil
 }
@@ -114,7 +113,6 @@ func (n *Node) GetPredecessor(_ *struct{}, reply *NodeAddress) error {
 }
 
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
-	log.Printf("Finding successor for id: %d\n", *id)
 	for _, succ := range n.Successors {
 		if *id > n.Id && *id <= succ.Id {
 			reply.IP = succ.IP
@@ -150,11 +148,10 @@ func (n *Node) fixFingers() {
 		next = 1
 	}
 	n.Next = next
-	id := n.Id + 2<<(next-1)%(2<<n.M)
+	id := n.Id + pow(2, next-1)%pow(2, n.M)
 	reply := new(NodeAddress)
 	// TODO should handle error?
 	n.FindSuccessor(&id, reply)
-	log.Printf("Received reply: %+v\n", reply)
 	n.FingerTable[next] = *reply
 }
 
@@ -213,6 +210,7 @@ func (n *Node) stabilize() {
 		newSuccessors = append(newSuccessors, successors[:len(successors)-len(newSuccessors)]...)
 		n.Successors = newSuccessors
 
+		log.Printf("Stabilized with successor, notifying: %+v\n", n.Successors[0])
 		callNotify(n.Successors[0], n.createAddress())
 		return
 	}
@@ -231,6 +229,13 @@ func (n *Node) createAddress() NodeAddress {
 		Port: n.Port,
 		Id:   n.Id,
 	}
+}
+
+func (n *Node) shouldChangePredecessor(potentialPredecessor NodeAddress) bool {
+	if predecessorIsNil(n.Predecessor) {
+		return true
+	}
+	return IsNewCloserPredecessor(n.Id, n.Predecessor.Id, potentialPredecessor.Id, n.M)
 }
 
 func callFindSuccessor(node NodeAddress, id *int) (*NodeAddress, error) {

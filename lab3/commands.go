@@ -17,6 +17,6 @@ func (n *Node) PrintState() {
 
 	fmt.Println("Finger Table:")
 	for i := 1; i <= n.M; i++ {
-		fmt.Printf("\tFinger %d (=%d): %+v\n", i, n.Id+2<<(i-1)%(2<<n.M), n.FingerTable[i])
+		fmt.Printf("\tFinger %d (=%d): %+v\n", i, (n.Id+pow(2, i-1))%pow(2, n.M), n.FingerTable[i])
 	}
 }
