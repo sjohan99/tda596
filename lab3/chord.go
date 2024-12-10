@@ -154,9 +154,7 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 
 	for _, succ := range nCopy.Successors {
 		if CounterClockwiseDistance(*id, nCopy.Id, nCopy.M) <= CounterClockwiseDistance(succ.Id, nCopy.Id, nCopy.M) {
-			reply.IP = succ.IP
-			reply.Port = succ.Port
-			reply.Id = succ.Id
+			fillReply(reply, succ)
 			log.Printf("Successor found: %+v\n", reply)
 			return nil
 		}
@@ -167,9 +165,7 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	self := nCopy.createAddress()
 	for _, next := range closestPrecedingNodes {
 		if next == self {
-			reply.IP = nCopy.IP
-			reply.Port = nCopy.Port
-			reply.Id = nCopy.Id
+			fillReply(reply, self)
 			log.Printf("Successor found itself: %+v\n", reply)
 			return nil
 		}
@@ -178,9 +174,7 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 			log.Printf("failed to find successor with closest preceding node: %+v. Retrying with next node.\n", next)
 			continue
 		}
-		reply.IP = nextReply.IP
-		reply.Port = nextReply.Port
-		reply.Id = nextReply.Id
+		fillReply(reply, *nextReply)
 		return nil
 	}
 	return errors.New("failed to find successor")
