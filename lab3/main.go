@@ -3,14 +3,17 @@ package main
 import (
 	"bufio"
 	"chord/argparser"
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 type logWriter struct{}
 
+// makes prefix (date, time, file) grey in terminal
 func (writer logWriter) Write(bytes []byte) (int, error) {
 	logEntry := string(bytes)
 	parts := strings.SplitN(logEntry, ": ", 2)
@@ -23,20 +26,28 @@ func (writer logWriter) Write(bytes []byte) (int, error) {
 }
 
 func main() {
-	config := argparser.ParseArguments()
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	log.SetOutput(new(logWriter))
+
+	config := argparser.ParseArguments()
 	var n Node
 	if config.Initialization == argparser.CREATE {
-		n = *createNode(config)
+		n = *CreateNode(config)
 	} else {
-		n = *joinNode(config)
+		n = *JoinNode(config)
 	}
-	n.Start(config)
+	ctx, cancel := context.WithCancel(context.Background())
+	n.Start(config, &ctx)
 	for {
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("Enter text: ")
-		reader.ReadString('\n')
-		n.PrintState()
+		input, _ := reader.ReadString('\n')
+		if strings.TrimSpace(input) == "exit" {
+			cancel()
+			time.Sleep(45 * time.Second)
+			break
+		} else {
+			n.PrintState()
+		}
 	}
 }

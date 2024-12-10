@@ -2,6 +2,7 @@ package main
 
 import (
 	"chord/argparser"
+	"context"
 	"errors"
 	"log"
 	"slices"
@@ -10,8 +11,6 @@ import (
 	"time"
 )
 
-const m = 6
-
 type NodeAddress struct {
 	IP   string
 	Port string
@@ -19,31 +18,32 @@ type NodeAddress struct {
 }
 
 type Node struct {
-	mu          sync.Mutex
-	Next        int // what finger to fix next
-	FingerTable map[int]NodeAddress
-	Id          int // 6edc84ffbb1c9c250094d78383dd5bf71c5c7a02 -> 12318923719284719 % 2^m -> 43
-	Successors  []NodeAddress
-	Predecessor NodeAddress
-	IP          string
-	Port        string
-	M           int
+	mu              sync.Mutex
+	Next            int // what finger to fix next
+	FingerTable     map[int]NodeAddress
+	Id              int // 6edc84ffbb1c9c250094d78383dd5bf71c5c7a02 -> 12318923719284719 % 2^m -> 43
+	Successors      []NodeAddress
+	Predecessor     NodeAddress
+	IP              string
+	Port            string
+	M               int
+	CalculateIdFunc func(string, int) int
 }
 
-func createNode(c argparser.Config) *Node {
+func CreateNode(c argparser.Config) *Node {
 	node := Node{
 		Next:        0,
 		FingerTable: make(map[int]NodeAddress),
-		Id:          getIdFromHash(c.Id, m),
+		Id:          c.CalculateIdFunc(c.Id, c.M),
 		Successors:  make([]NodeAddress, c.Successors),
 		Predecessor: NodeAddress{},
 		IP:          c.Address,
 		Port:        strconv.Itoa(c.Port),
-		M:           m,
+		M:           c.M,
 	}
 
 	for i := 0; i < c.Successors; i++ {
-		node.Successors[i] = NodeAddress{IP: c.Address, Port: strconv.Itoa(c.Port), Id: getIdFromHash(c.Id, m)}
+		node.Successors[i] = NodeAddress{IP: c.Address, Port: strconv.Itoa(c.Port), Id: c.CalculateIdFunc(c.Id, c.M)}
 	}
 
 	// init finger table
@@ -53,9 +53,9 @@ func createNode(c argparser.Config) *Node {
 	return &node
 }
 
-func joinNode(c argparser.Config) *Node {
-	n := createNode(c)
-	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: getIdFromHash(c.JoinId, m)}
+func JoinNode(c argparser.Config) *Node {
+	n := CreateNode(c)
+	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: c.CalculateIdFunc(c.JoinId, c.M)}
 
 	reply, err := callFindSuccessor(np, &n.Id)
 	if err != nil {
@@ -64,33 +64,36 @@ func joinNode(c argparser.Config) *Node {
 	for i := range n.Successors {
 		n.Successors[i] = *reply
 	}
-	log.Printf("Joining node: %+v\n", n)
 
 	for i := 1; i <= n.M; i++ {
 		n.fixFingers()
 	}
-	log.Printf("Joined node: %+v\n", n)
 	return n
 }
 
-func (n *Node) Start(c argparser.Config) {
-	n.StartServer(n.IP, n.Port)
+func (n *Node) Start(c argparser.Config, ctx *context.Context) {
+	if ctx == nil {
+		newCtx := context.Background()
+		ctx = &newCtx
+	}
+	n.StartServer(n.IP, n.Port, ctx)
+	n.startBackgroundTask(ctx, c.StabilizeInterval, n.stabilize)
+	n.startBackgroundTask(ctx, c.FixFingersInterval, n.fixFingers)
+	n.startBackgroundTask(ctx, c.CheckPredecessorInterval, n.checkPredecessor)
+}
+
+func (n *Node) startBackgroundTask(ctx *context.Context, interval time.Duration, task func()) {
 	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
-			time.Sleep(c.StabilizeInterval)
-			n.stabilize()
-		}
-	}()
-	go func() {
-		for {
-			time.Sleep(c.FixFingersInterval)
-			n.fixFingers()
-		}
-	}()
-	go func() {
-		for {
-			time.Sleep(c.CheckPredecessorInterval)
-			n.checkPredecessor()
+			select {
+			case <-ticker.C:
+				task()
+			case <-(*ctx).Done():
+				log.Printf("Shutting down background tasks")
+				return
+			}
 		}
 	}()
 }
@@ -120,7 +123,7 @@ func (n *Node) GetPredecessor(_ *struct{}, reply *NodeAddress) error {
 	return nil
 }
 
-func (n *Node) copyNode() Node {
+func (n *Node) copyNodeState() Node {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	ft := make(map[int]NodeAddress)
@@ -150,28 +153,25 @@ func fillReply(reply *NodeAddress, node NodeAddress) {
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	// Copy the nodes state and perform the search on the copy
 	// to avoid locking the node for the entire search.
-	nCopy := n.copyNode()
+	nCopy := n.copyNodeState()
 
 	for _, succ := range nCopy.Successors {
 		if CounterClockwiseDistance(*id, nCopy.Id, nCopy.M) <= CounterClockwiseDistance(succ.Id, nCopy.Id, nCopy.M) {
 			fillReply(reply, succ)
-			log.Printf("Successor found: %+v\n", reply)
 			return nil
 		}
 	}
 
-	closestPrecedingNodes := nCopy.closestPrecedingNode(*id)
+	closestPrecedingNodes := nCopy.closestPrecedingNodes(*id)
 
 	self := nCopy.createAddress()
 	for _, next := range closestPrecedingNodes {
 		if next == self {
 			fillReply(reply, self)
-			log.Printf("Successor found itself: %+v\n", reply)
 			return nil
 		}
 		nextReply, err := callFindSuccessor(next, id)
 		if err != nil {
-			log.Printf("failed to find successor with closest preceding node: %+v. Retrying with next node.\n", next)
 			continue
 		}
 		fillReply(reply, *nextReply)
@@ -183,7 +183,7 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 func (n *Node) fixFingers() {
 	n.mu.Lock()
 	next := n.Next + 1
-	if next > m {
+	if next > n.M {
 		next = 1
 	}
 	n.Next = next
@@ -199,7 +199,7 @@ func (n *Node) fixFingers() {
 	n.mu.Unlock()
 }
 
-func (n *Node) closestPrecedingNode(id int) []NodeAddress {
+func (n *Node) closestPrecedingNodes(id int) []NodeAddress {
 	nodes := []NodeAddress{n.createAddress()}
 	for i := n.M; i >= 1; i-- {
 		nodes = append(nodes, n.FingerTable[i])
@@ -208,6 +208,9 @@ func (n *Node) closestPrecedingNode(id int) []NodeAddress {
 	slices.SortFunc(nodes, func(i, j NodeAddress) int {
 		return CounterClockwiseDistance(i.Id, id, n.M) - CounterClockwiseDistance(j.Id, id, n.M)
 	})
+	nodes = slices.CompactFunc(nodes, func(a, b NodeAddress) bool {
+		return a == b
+	})
 	return nodes
 }
 
@@ -215,12 +218,10 @@ func (n *Node) stabilize() {
 	for _, succ := range n.Successors {
 		successorList, err := callGetSuccessorList(succ)
 		if err != nil {
-			log.Printf("failed to stabilize with successor: %+v\n", succ)
 			continue
 		}
 		predecessor, err := callGetPredecessor(succ)
 		if err != nil {
-			log.Printf("failed to stabilize with successor: %+v\n", succ)
 			continue
 		}
 

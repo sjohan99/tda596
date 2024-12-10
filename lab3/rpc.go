@@ -1,16 +1,25 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 )
 
-func (n *Node) StartServer(ip string, port string) {
-	rpc.Register(n)
-	rpc.HandleHTTP()
+const chordPath = "/_chord_"
+
+func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
+	server := rpc.NewServer()
+	server.Register(n)
+	server.HandleHTTP(chordPath+port, "/chord/debug"+port)
 	l, err := net.Listen("tcp", ip+":"+port)
+	go func() {
+		<-(*ctx).Done()
+		log.Printf("Shutting down server")
+		l.Close()
+	}()
 	if err != nil {
 		log.Fatal("listen error:", err)
 	}
@@ -18,7 +27,7 @@ func (n *Node) StartServer(ip string, port string) {
 }
 
 func Call(rpcname, ip, port string, args interface{}, reply interface{}) bool {
-	client, err := rpc.DialHTTP("tcp", ip+":"+port)
+	client, err := rpc.DialHTTPPath("tcp", ip+":"+port, chordPath+port)
 	if err != nil {
 		log.Println("dialing:", err)
 		return false

@@ -3,7 +3,7 @@ package main
 import "fmt"
 
 func (n *Node) PrintState() {
-	nCopy := n.copyNode()
+	nCopy := n.copyNodeState()
 	fmt.Println("Node:")
 	fmt.Printf("\tId: %d\n", nCopy.Id)
 	fmt.Printf("\tAddress: %s:%s\n", nCopy.IP, nCopy.Port)
