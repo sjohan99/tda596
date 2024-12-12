@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"time"
 )
 
 type NodeAddress struct {
@@ -20,9 +19,9 @@ type NodeAddress struct {
 
 type Node struct {
 	sync.Mutex
-	Next            int // what finger to fix next
+	Next            int
 	FingerTable     map[int]NodeAddress
-	Id              int // 6edc84ffbb1c9c250094d78383dd5bf71c5c7a02 -> 12318923719284719 % 2^m -> 43
+	Id              int
 	Successors      []NodeAddress
 	Predecessor     NodeAddress
 	IP              string
@@ -85,22 +84,6 @@ func (n *Node) Start(c argparser.Config, ctx *context.Context) {
 	n.startBackgroundTask(ctx, c.CheckPredecessorInterval, n.checkPredecessor)
 }
 
-func (n *Node) startBackgroundTask(ctx *context.Context, interval time.Duration, task func()) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				task()
-			case <-(*ctx).Done():
-				log.Printf("Shutting down background tasks")
-				return
-			}
-		}
-	}()
-}
-
 func (n *Node) HealthCheck(_ *struct{}, _ *struct{}) error {
 	return nil
 }
@@ -126,34 +109,6 @@ func (n *Node) GetPredecessor(_ *struct{}, reply *NodeAddress) error {
 	*reply = n.Predecessor
 	n.Unlock()
 	return nil
-}
-
-func (n *Node) copyNodeState() Node {
-	n.Lock()
-	defer n.Unlock()
-	ft := make(map[int]NodeAddress)
-	for i, finger := range n.FingerTable {
-		ft[i] = finger
-	}
-	succs := make([]NodeAddress, len(n.Successors))
-	copy(succs, n.Successors)
-	return Node{
-		Next:        n.Next,
-		FingerTable: ft,
-		Id:          n.Id,
-		Successors:  succs,
-		Predecessor: n.Predecessor,
-		IP:          n.IP,
-		Port:        n.Port,
-		M:           n.M,
-		Files:       n.Files,
-	}
-}
-
-func fillReply(reply *NodeAddress, node NodeAddress) {
-	reply.IP = node.IP
-	reply.Port = node.Port
-	reply.Id = node.Id
 }
 
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
@@ -186,11 +141,6 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	return errors.New("failed to find successor")
 }
 
-type StoreFileArgs struct {
-	Filename string
-	Data     []byte
-}
-
 func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
 	path := makeFilePath(args.Filename, n.Id)
 	file, err := os.Create(path) // add prefix to filename to simulate file being stored at node <id>
@@ -208,11 +158,6 @@ func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
 	n.Files = append(n.Files, args.Filename)
 	n.Unlock()
 	return nil
-}
-
-type GetFileReply struct {
-	Data    []byte
-	Message string
 }
 
 func (n *Node) GetFile(filename *string, reply *GetFileReply) error {
@@ -308,14 +253,6 @@ func (n *Node) checkPredecessor() {
 		n.Predecessor = NodeAddress{}
 	}
 	n.Unlock()
-}
-
-func (n *Node) createAddress() NodeAddress {
-	return NodeAddress{
-		IP:   n.IP,
-		Port: n.Port,
-		Id:   n.Id,
-	}
 }
 
 func (n *Node) shouldChangePredecessor(potentialPredecessor NodeAddress) bool {

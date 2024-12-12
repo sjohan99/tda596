@@ -10,6 +10,16 @@ import (
 
 const chordPath = "/_chord_"
 
+type StoreFileArgs struct {
+	Filename string
+	Data     []byte
+}
+
+type GetFileReply struct {
+	Data    []byte
+	Message string
+}
+
 func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 	server := rpc.NewServer()
 	server.Register(n)
