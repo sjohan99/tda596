@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"slices"
-	"strconv"
 	"sync"
 )
 
@@ -19,16 +18,16 @@ type NodeAddress struct {
 
 type Node struct {
 	sync.Mutex
-	Next            int
-	FingerTable     map[int]NodeAddress
-	Id              int
-	Successors      []NodeAddress
-	Predecessor     NodeAddress
-	IP              string
-	Port            string
-	M               int
-	CalculateIdFunc func([]byte, int) int
-	Files           []string
+	Next            int                   // next finger to fix
+	FingerTable     map[int]NodeAddress   // finger table
+	Id              int                   // the node's identifier in the ring
+	Successors      []NodeAddress         // the node's successors
+	Predecessor     NodeAddress           // the node's predecessor
+	IP              string                // the node's IP address
+	Port            string                // the node's port
+	M               int                   // the ring size = 2^m
+	CalculateIdFunc func([]byte, int) int // function to calculate the ID from its hash
+	Files           []string              // the files stored at the node
 }
 
 func CreateNode(c argparser.Config) *Node {
@@ -39,37 +38,38 @@ func CreateNode(c argparser.Config) *Node {
 		Successors:      make([]NodeAddress, c.Successors),
 		Predecessor:     NodeAddress{},
 		IP:              c.Address,
-		Port:            strconv.Itoa(c.Port),
+		Port:            c.Port,
 		M:               c.M,
 		CalculateIdFunc: c.CalculateIdFunc,
 	}
 
+	addr := node.createAddress()
 	for i := 0; i < c.Successors; i++ {
-		node.Successors[i] = NodeAddress{IP: c.Address, Port: strconv.Itoa(c.Port), Id: node.CalculateIdFunc(c.Id, c.M)}
+		node.Successors[i] = addr
+	}
+	for i := 1; i <= node.M; i++ {
+		node.FingerTable[i] = addr
 	}
 
-	// init finger table
-	for i := 1; i <= node.M; i++ {
-		node.FingerTable[i] = node.createAddress()
-	}
 	return &node
 }
 
 func JoinNode(c argparser.Config) *Node {
 	n := CreateNode(c)
-	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: n.CalculateIdFunc(c.JoinId, c.M)}
+	np := NodeAddress{IP: c.JoinAddress, Port: c.JoinPort, Id: n.CalculateIdFunc(c.JoinId, c.M)}
 
 	reply, err := callFindSuccessor(np, &n.Id)
 	if err != nil {
 		log.Fatal("failed to join ring:", err)
 	}
+
 	for i := range n.Successors {
 		n.Successors[i] = *reply
 	}
-
 	for i := 1; i <= n.M; i++ {
 		n.fixFingers()
 	}
+
 	return n
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -20,18 +21,18 @@ const (
 
 type Config struct {
 	Address                  string                // a | The IP address that the Chord client will bind to, as well as advertise to other nodes.
-	Port                     int                   // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
+	Port                     string                // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
 	JoinAddress              string                // ja | The IP address of the machine running a Chord node. The Chord client will join this node's ring. Empty string if unspecified.
-	JoinPort                 int                   // jp | The port that an existing Chord node is bound to and listening on. 0 if unspecified.
+	JoinPort                 string                // jp | The port that an existing Chord node is bound to and listening on. 0 if unspecified.
 	JoinId                   []byte                // The identifier (ID) assigned to the Chord node that the Chord client will join.
 	StabilizeInterval        time.Duration         // ts | The time between invocations of 'stabilize'.
 	FixFingersInterval       time.Duration         // tff | The time between invocations of 'fix fingers'.
 	CheckPredecessorInterval time.Duration         // tcp | The time between invocations of 'check predecessor'.
 	Successors               int                   // r | The number of successors maintained by the Chord client.
 	Id                       []byte                // i | The identifier (ID) assigned to the Chord client.
+	M                        int                   // m | Ring size = 2^m
 	Initialization           Initialization        // Whether the client is creating a new ring or joining an existing one.
 	CalculateIdFunc          func([]byte, int) int // Function to calculate the ID of a node.
-	M                        int                   // Ring size = 2^m
 }
 
 var requiredArgs = []string{"a", "p", "ts", "tff", "tcp", "r"}
@@ -137,9 +138,9 @@ func ParseArguments() Config {
 
 	config := Config{
 		Address:                  *aFlag,
-		Port:                     *pFlag,
+		Port:                     strconv.Itoa(*pFlag),
 		JoinAddress:              *jaFlag,
-		JoinPort:                 *jpFlag,
+		JoinPort:                 strconv.Itoa(*jpFlag),
 		JoinId:                   joinId,
 		StabilizeInterval:        time.Duration(*tsFlag) * time.Millisecond,
 		FixFingersInterval:       time.Duration(*tffFlag) * time.Millisecond,

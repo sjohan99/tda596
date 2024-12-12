@@ -7,6 +7,7 @@ import (
 	"log"
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -20,7 +21,7 @@ func makeConfig(id int, port int) a.Config {
 
 	return a.Config{
 		Address:                  "localhost",
-		Port:                     port,
+		Port:                     strconv.Itoa(port),
 		StabilizeInterval:        127,
 		FixFingersInterval:       151,
 		CheckPredecessorInterval: 167,
@@ -28,7 +29,6 @@ func makeConfig(id int, port int) a.Config {
 		CalculateIdFunc:          calcFunc,
 		M:                        6,
 	}
-
 }
 
 func makeJoinConfig(id int, port int, c a.Config) a.Config {
@@ -184,7 +184,7 @@ func TestChordFourNodesWithOneNodeFailing(t *testing.T) {
 
 	cancel() // stop node1
 
-	time.Sleep(7 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	node2State := node2.GetState()
 	node3State := node3.GetState()
