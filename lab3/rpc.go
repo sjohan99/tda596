@@ -15,14 +15,14 @@ func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 	server.Register(n)
 	server.HandleHTTP(chordPath+port, "/chord/debug"+port)
 	l, err := net.Listen("tcp", ip+":"+port)
+	if err != nil {
+		log.Fatal("listen error:", err)
+	}
 	go func() {
 		<-(*ctx).Done()
 		log.Printf("Shutting down server")
 		l.Close()
 	}()
-	if err != nil {
-		log.Fatal("listen error:", err)
-	}
 	go http.Serve(l, nil)
 }
 

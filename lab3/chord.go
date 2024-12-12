@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -18,7 +19,7 @@ type NodeAddress struct {
 }
 
 type Node struct {
-	mu              sync.Mutex
+	sync.Mutex
 	Next            int // what finger to fix next
 	FingerTable     map[int]NodeAddress
 	Id              int // 6edc84ffbb1c9c250094d78383dd5bf71c5c7a02 -> 12318923719284719 % 2^m -> 43
@@ -27,23 +28,24 @@ type Node struct {
 	IP              string
 	Port            string
 	M               int
-	CalculateIdFunc func(string, int) int
+	CalculateIdFunc func([]byte, int) int
 }
 
 func CreateNode(c argparser.Config) *Node {
 	node := Node{
-		Next:        0,
-		FingerTable: make(map[int]NodeAddress),
-		Id:          c.CalculateIdFunc(c.Id, c.M),
-		Successors:  make([]NodeAddress, c.Successors),
-		Predecessor: NodeAddress{},
-		IP:          c.Address,
-		Port:        strconv.Itoa(c.Port),
-		M:           c.M,
+		Next:            0,
+		FingerTable:     make(map[int]NodeAddress),
+		Id:              c.CalculateIdFunc(c.Id, c.M),
+		Successors:      make([]NodeAddress, c.Successors),
+		Predecessor:     NodeAddress{},
+		IP:              c.Address,
+		Port:            strconv.Itoa(c.Port),
+		M:               c.M,
+		CalculateIdFunc: c.CalculateIdFunc,
 	}
 
 	for i := 0; i < c.Successors; i++ {
-		node.Successors[i] = NodeAddress{IP: c.Address, Port: strconv.Itoa(c.Port), Id: c.CalculateIdFunc(c.Id, c.M)}
+		node.Successors[i] = NodeAddress{IP: c.Address, Port: strconv.Itoa(c.Port), Id: node.CalculateIdFunc(c.Id, c.M)}
 	}
 
 	// init finger table
@@ -55,7 +57,7 @@ func CreateNode(c argparser.Config) *Node {
 
 func JoinNode(c argparser.Config) *Node {
 	n := CreateNode(c)
-	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: c.CalculateIdFunc(c.JoinId, c.M)}
+	np := NodeAddress{IP: c.JoinAddress, Port: strconv.Itoa(c.JoinPort), Id: n.CalculateIdFunc(c.JoinId, c.M)}
 
 	reply, err := callFindSuccessor(np, &n.Id)
 	if err != nil {
@@ -103,15 +105,15 @@ func (n *Node) HealthCheck(_ *struct{}, _ *struct{}) error {
 }
 
 func (n *Node) GetSuccessorList(_ *struct{}, reply *[]NodeAddress) error {
-	n.mu.Lock()
+	n.Lock()
 	*reply = n.Successors
-	n.mu.Unlock()
+	n.Unlock()
 	return nil
 }
 
 func (n *Node) Notify(potentialPredecessor *NodeAddress, _ *struct{}) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.Lock()
+	defer n.Unlock()
 	if n.shouldChangePredecessor(*potentialPredecessor) {
 		n.Predecessor = *potentialPredecessor
 	}
@@ -119,13 +121,15 @@ func (n *Node) Notify(potentialPredecessor *NodeAddress, _ *struct{}) error {
 }
 
 func (n *Node) GetPredecessor(_ *struct{}, reply *NodeAddress) error {
+	n.Lock()
 	*reply = n.Predecessor
+	n.Unlock()
 	return nil
 }
 
 func (n *Node) copyNodeState() Node {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.Lock()
+	defer n.Unlock()
 	ft := make(map[int]NodeAddress)
 	for i, finger := range n.FingerTable {
 		ft[i] = finger
@@ -153,8 +157,8 @@ func fillReply(reply *NodeAddress, node NodeAddress) {
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	// Copy the nodes state and perform the search on the copy
 	// to avoid locking the node for the entire search.
+	log.Printf("Finding successor for id: %d\n", *id)
 	nCopy := n.copyNodeState()
-
 	for _, succ := range nCopy.Successors {
 		if CounterClockwiseDistance(*id, nCopy.Id, nCopy.M) <= CounterClockwiseDistance(succ.Id, nCopy.Id, nCopy.M) {
 			fillReply(reply, succ)
@@ -180,23 +184,55 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	return errors.New("failed to find successor")
 }
 
+type StoreFileArgs struct {
+	Filename string
+	Data     []byte
+}
+
+func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
+	path := makeFilePath(args.Filename, n.Id)
+	file, err := os.Create(path) // add prefix to filename to simulate file being stored at node <id>
+	if err != nil {
+		log.Printf("failed to create file: %+v\n", err)
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(args.Data)
+	if err != nil {
+		log.Printf("failed to write to file: %+v\n", err)
+		return err
+	}
+	return nil
+}
+
+func (n *Node) GetFile(filename *string, reply *[]byte) error {
+	path := makeFilePath(*filename, n.Id)
+	replyData, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("failed to read file: %s. error: %s\n", *filename, err)
+		return err
+	}
+	*reply = replyData
+	return nil
+}
+
 func (n *Node) fixFingers() {
-	n.mu.Lock()
+	n.Lock()
 	next := n.Next + 1
 	if next > n.M {
 		next = 1
 	}
 	n.Next = next
-	n.mu.Unlock()
+	n.Unlock()
 	id := (n.Id + pow(2, next-1)) % pow(2, n.M)
 	reply := new(NodeAddress)
 	err := n.FindSuccessor(&id, reply)
 	if err != nil {
 		log.Fatalf("failed to fix finger: %+v\n", err)
 	}
-	n.mu.Lock()
+	n.Lock()
 	n.FingerTable[next] = *reply
-	n.mu.Unlock()
+	n.Unlock()
 }
 
 func (n *Node) closestPrecedingNodes(id int) []NodeAddress {
@@ -241,10 +277,10 @@ func (n *Node) stabilize() {
 		successors := *successorList
 		newSuccessors = append(newSuccessors, succ)
 		newSuccessors = append(newSuccessors, successors[:len(successors)-len(newSuccessors)]...)
-		n.mu.Lock()
+		n.Lock()
 		n.Successors = newSuccessors
 		address := n.createAddress()
-		n.mu.Unlock()
+		n.Unlock()
 
 		callNotify(n.Successors[0], address)
 		return
@@ -253,11 +289,11 @@ func (n *Node) stabilize() {
 }
 
 func (n *Node) checkPredecessor() {
-	n.mu.Lock()
+	n.Lock()
 	if predecessorNotNil(n.Predecessor) && !callHealthCheck(n.Predecessor) {
 		n.Predecessor = NodeAddress{}
 	}
-	n.mu.Unlock()
+	n.Unlock()
 }
 
 func (n *Node) createAddress() NodeAddress {
@@ -308,4 +344,12 @@ func callHealthCheck(node NodeAddress) bool {
 
 func callNotify(node NodeAddress, n NodeAddress) {
 	Call("Node.Notify", node.IP, node.Port, n, new(struct{}))
+}
+
+func callStoreFile(node NodeAddress, args *StoreFileArgs) bool {
+	return Call("Node.StoreFile", node.IP, node.Port, args, new(struct{}))
+}
+
+func callGetFile(node NodeAddress, filename *string, reply *[]byte) bool {
+	return Call("Node.GetFile", node.IP, node.Port, filename, reply)
 }

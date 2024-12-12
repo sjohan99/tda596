@@ -3,12 +3,10 @@ package main
 import (
 	"bufio"
 	"chord/argparser"
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
-	"time"
 )
 
 type logWriter struct{}
@@ -36,18 +34,32 @@ func main() {
 	} else {
 		n = *JoinNode(config)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	n.Start(config, &ctx)
+	n.Start(config, nil)
 	for {
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Enter text: ")
+		fmt.Print("Enter command (-help): ")
 		input, _ := reader.ReadString('\n')
-		if strings.TrimSpace(input) == "exit" {
-			cancel()
-			time.Sleep(45 * time.Second)
-			break
-		} else {
-			n.PrintState()
+		parts := strings.Split(input, " ")
+		command := strings.ToLower(strings.TrimSpace(parts[0]))
+		switch command {
+		case "lookup":
+			if len(parts) < 2 {
+				fmt.Println("Error: Missing filename.")
+				break
+			}
+			n.LookUpCmd(strings.TrimSpace(parts[1]))
+		case "storefile":
+			if len(parts) < 2 {
+				fmt.Println("Error: Missing filename.")
+				break
+			}
+			n.StoreFileCmd(strings.TrimSpace(parts[1]))
+		case "printstate":
+			n.PrintStateCmd()
+		case "-help":
+			fmt.Printf("Commands:\n\t-lookup <filename>\n\t-storefile <filename>\n\t-printstate\n\t-exit\n")
+		case "exit":
+			return
 		}
 	}
 }
