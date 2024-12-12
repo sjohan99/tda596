@@ -29,6 +29,7 @@ type Node struct {
 	Port            string
 	M               int
 	CalculateIdFunc func([]byte, int) int
+	Files           []string
 }
 
 func CreateNode(c argparser.Config) *Node {
@@ -145,6 +146,7 @@ func (n *Node) copyNodeState() Node {
 		IP:          n.IP,
 		Port:        n.Port,
 		M:           n.M,
+		Files:       n.Files,
 	}
 }
 
@@ -157,7 +159,7 @@ func fillReply(reply *NodeAddress, node NodeAddress) {
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	// Copy the nodes state and perform the search on the copy
 	// to avoid locking the node for the entire search.
-	log.Printf("Finding successor for id: %d\n", *id)
+	//log.Printf("Finding successor for id: %d\n", *id)
 	nCopy := n.copyNodeState()
 	for _, succ := range nCopy.Successors {
 		if CounterClockwiseDistance(*id, nCopy.Id, nCopy.M) <= CounterClockwiseDistance(succ.Id, nCopy.Id, nCopy.M) {
@@ -202,17 +204,29 @@ func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
 		log.Printf("failed to write to file: %+v\n", err)
 		return err
 	}
+	n.Lock()
+	n.Files = append(n.Files, args.Filename)
+	n.Unlock()
 	return nil
 }
 
-func (n *Node) GetFile(filename *string, reply *[]byte) error {
+type GetFileReply struct {
+	Data    []byte
+	Message string
+}
+
+func (n *Node) GetFile(filename *string, reply *GetFileReply) error {
+	if !slices.Contains(n.Files, *filename) {
+		reply.Message = "File does not exist in Chord ring"
+		return nil
+	}
 	path := makeFilePath(*filename, n.Id)
 	replyData, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("failed to read file: %s. error: %s\n", *filename, err)
 		return err
 	}
-	*reply = replyData
+	reply.Data = replyData
 	return nil
 }
 
@@ -242,7 +256,7 @@ func (n *Node) closestPrecedingNodes(id int) []NodeAddress {
 	}
 	nodes = append(nodes, n.Successors...)
 	slices.SortFunc(nodes, func(i, j NodeAddress) int {
-		return CounterClockwiseDistance(i.Id, id, n.M) - CounterClockwiseDistance(j.Id, id, n.M)
+		return CounterClockwiseDistance(j.Id, id, n.M) - CounterClockwiseDistance(i.Id, id, n.M)
 	})
 	nodes = slices.CompactFunc(nodes, func(a, b NodeAddress) bool {
 		return a == b
@@ -350,6 +364,6 @@ func callStoreFile(node NodeAddress, args *StoreFileArgs) bool {
 	return Call("Node.StoreFile", node.IP, node.Port, args, new(struct{}))
 }
 
-func callGetFile(node NodeAddress, filename *string, reply *[]byte) bool {
+func callGetFile(node NodeAddress, filename *string, reply *GetFileReply) bool {
 	return Call("Node.GetFile", node.IP, node.Port, filename, reply)
 }

@@ -24,6 +24,11 @@ func (n *Node) PrintStateCmd() {
 	for i := 1; i <= nCopy.M; i++ {
 		fmt.Printf("\tFinger %d (=%d): %+v\n", i, (nCopy.Id+pow(2, i-1))%pow(2, nCopy.M), nCopy.FingerTable[i])
 	}
+
+	fmt.Println("Files:")
+	for _, filename := range nCopy.Files {
+		fmt.Printf("\t%s\n", filename)
+	}
 }
 
 func (n *Node) LookUp(filename string) (*NodeAddress, error) {
@@ -48,14 +53,14 @@ func (n *Node) LookUpCmd(filename string) {
 		fmt.Println("Error:", err)
 		return
 	}
-	reply := new([]byte)
+	reply := new(GetFileReply)
 	ok := callGetFile(*node, &filename, reply)
 	if !ok {
-		fmt.Println("Error: Failed to get file.")
+		fmt.Println(reply.Message)
 		return
 	}
 	fmt.Printf("File '%s' is stored at node id=%d, ip=%s, port=%s\n", filename, node.Id, node.IP, node.Port)
-	fmt.Printf("File contents: \n%s\n", string(*reply))
+	fmt.Printf("File contents: \n%s\n", string(reply.Data))
 }
 
 func (n *Node) StoreFileCmd(filename string) {
