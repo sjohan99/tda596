@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha1"
 	"fmt"
 	"os"
 )
@@ -17,7 +16,7 @@ func (n *Node) PrintStateCmd() {
 		fmt.Printf("\tSuccessor %d: %+v\n", i, succ)
 	}
 
-	fmt.Println("Predecessors:")
+	fmt.Println("Predecessor:")
 	fmt.Printf("\tId: %d\n", nCopy.Predecessor.Id)
 
 	fmt.Println("Finger Table:")
@@ -31,22 +30,6 @@ func (n *Node) PrintStateCmd() {
 	}
 }
 
-func (n *Node) LookUp(filename string) (*NodeAddress, error) {
-	// "hello.txt" -> 90a9sd09asd80912830918 -> 34
-	hasher := sha1.New()
-	hasher.Write([]byte(filename))
-	hash := hasher.Sum(nil)
-	id := n.CalculateIdFunc(hash, n.M)
-	fmt.Printf("file has id=%d\n", id)
-	reply := new(NodeAddress)
-	err := n.FindSuccessor(&id, reply)
-	if err != nil {
-		fmt.Printf("Failed to find the successor for file '%s' with id=%d\n", filename, id)
-		return nil, err
-	}
-	return reply, nil
-}
-
 func (n *Node) LookUpCmd(filename string) {
 	node, err := n.LookUp(filename)
 	if err != nil {
@@ -56,10 +39,14 @@ func (n *Node) LookUpCmd(filename string) {
 	reply := new(GetFileReply)
 	ok := callGetFile(*node, &filename, reply)
 	if !ok {
-		fmt.Println(reply.Message)
+		fmt.Printf("Could not look up file. Failed to reach node %d", node.Id)
 		return
 	}
-	fmt.Printf("File '%s' is stored at node id=%d, ip=%s, port=%s\n", filename, node.Id, node.IP, node.Port)
+	if reply.Message != "" {
+		fmt.Printf("Error: %s\n", reply.Message)
+		return
+	}
+	fmt.Printf("File '%s' is stored at node:\n \tid=%d\n\tip=%s\n\tport=%s\n", filename, node.Id, node.IP, node.Port)
 	fmt.Printf("File contents: \n%s\n", string(reply.Data))
 }
 
@@ -81,5 +68,7 @@ func (n *Node) StoreFileCmd(filename string) {
 	ok := callStoreFile(*targetNode, &args)
 	if !ok {
 		fmt.Println("Error: Failed to store file.")
+		return
 	}
+	fmt.Printf("File '%s' stored at node id=%d\n", filename, targetNode.Id)
 }

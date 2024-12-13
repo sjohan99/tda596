@@ -83,6 +83,13 @@ func (n *Node) startBackgroundTask(ctx *context.Context, interval time.Duration,
 	}()
 }
 
+func (n *Node) shouldChangePredecessor(potentialPredecessor NodeAddress) bool {
+	if predecessorIsNil(n.Predecessor) {
+		return true
+	}
+	return IsNewCloserPredecessor(n.Id, n.Predecessor.Id, potentialPredecessor.Id, n.M)
+}
+
 // Check if the new node is closer (counter clockwise) to the current node than the old node
 func IsNewCloserPredecessor(node, old, new, m int) bool {
 	if node == old { // always replace if node's predecessor is itself

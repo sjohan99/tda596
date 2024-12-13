@@ -20,6 +20,11 @@ type GetFileReply struct {
 	Message string
 }
 
+type SuccsAndPredReply struct {
+	Successors  *[]NodeAddress
+	Predecessor *NodeAddress
+}
+
 func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 	server := rpc.NewServer()
 	server.Register(n)
@@ -39,11 +44,10 @@ func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 func Call(rpcname, ip, port string, args interface{}, reply interface{}) bool {
 	client, err := rpc.DialHTTPPath("tcp", ip+":"+port, chordPath+port)
 	if err != nil {
-		log.Println("dialing:", err)
 		return false
 	}
-	pingCall := client.Go(rpcname, args, reply, nil)
-	res := <-pingCall.Done
+	call := client.Go(rpcname, args, reply, nil)
+	res := <-call.Done
 	if res.Error != nil {
 		log.Println("Error:", res.Error)
 		return false

@@ -3,10 +3,13 @@ package main
 import (
 	"chord/argparser"
 	"context"
+	"crypto/sha1"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 )
 
@@ -55,28 +58,25 @@ func CreateNode(c argparser.Config) *Node {
 }
 
 func JoinNode(c argparser.Config) *Node {
-	n := CreateNode(c)
-	np := NodeAddress{IP: c.JoinAddress, Port: c.JoinPort, Id: n.CalculateIdFunc(c.JoinId, c.M)}
+	node := CreateNode(c)
 
-	reply, err := callFindSuccessor(np, &n.Id)
+	joinAddress := NodeAddress{IP: c.JoinAddress, Port: c.JoinPort, Id: node.CalculateIdFunc(c.JoinId, c.M)}
+	reply, err := callFindSuccessor(joinAddress, &node.Id)
 	if err != nil {
 		log.Fatal("failed to join ring:", err)
 	}
 
-	for i := range n.Successors {
-		n.Successors[i] = *reply
-	}
-	for i := 1; i <= n.M; i++ {
-		n.fixFingers()
+	for i := range node.Successors {
+		node.Successors[i] = *reply
 	}
 
-	return n
+	return node
 }
 
 func (n *Node) Start(c argparser.Config, ctx *context.Context) {
 	if ctx == nil {
-		newCtx := context.Background()
-		ctx = &newCtx
+		bgCtx := context.Background()
+		ctx = &bgCtx
 	}
 	n.StartServer(n.IP, n.Port, ctx)
 	n.startBackgroundTask(ctx, c.StabilizeInterval, n.stabilize)
@@ -88,10 +88,11 @@ func (n *Node) HealthCheck(_ *struct{}, _ *struct{}) error {
 	return nil
 }
 
-func (n *Node) GetSuccessorList(_ *struct{}, reply *[]NodeAddress) error {
+func (n *Node) GetSuccsAndPred(_ *struct{}, reply *SuccsAndPredReply) error {
 	n.Lock()
-	*reply = n.Successors
-	n.Unlock()
+	defer n.Unlock()
+	reply.Successors = &n.Successors
+	reply.Predecessor = &n.Predecessor
 	return nil
 }
 
@@ -104,17 +105,9 @@ func (n *Node) Notify(potentialPredecessor *NodeAddress, _ *struct{}) error {
 	return nil
 }
 
-func (n *Node) GetPredecessor(_ *struct{}, reply *NodeAddress) error {
-	n.Lock()
-	*reply = n.Predecessor
-	n.Unlock()
-	return nil
-}
-
 func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 	// Copy the nodes state and perform the search on the copy
 	// to avoid locking the node for the entire search.
-	//log.Printf("Finding successor for id: %d\n", *id)
 	nCopy := n.copyNodeState()
 	for _, succ := range nCopy.Successors {
 		if CounterClockwiseDistance(*id, nCopy.Id, nCopy.M) <= CounterClockwiseDistance(succ.Id, nCopy.Id, nCopy.M) {
@@ -143,13 +136,7 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 
 func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
 	path := makeFilePath(args.Filename, n.Id)
-	file, err := os.Create(path) // add prefix to filename to simulate file being stored at node <id>
-	if err != nil {
-		log.Printf("failed to create file: %+v\n", err)
-		return err
-	}
-	defer file.Close()
-	_, err = file.Write(args.Data)
+	err := os.WriteFile(path, args.Data, os.ModePerm)
 	if err != nil {
 		log.Printf("failed to write to file: %+v\n", err)
 		return err
@@ -173,6 +160,20 @@ func (n *Node) GetFile(filename *string, reply *GetFileReply) error {
 	}
 	reply.Data = replyData
 	return nil
+}
+
+func (n *Node) LookUp(filename string) (*NodeAddress, error) {
+	hasher := sha1.New()
+	hasher.Write([]byte(filename))
+	hash := hasher.Sum(nil)
+	id := n.CalculateIdFunc(hash, n.M)
+	reply := new(NodeAddress)
+	err := n.FindSuccessor(&id, reply)
+	if err != nil {
+		message := fmt.Sprintf("Could not find any node for file '%s' with id=%d\n", filename, id)
+		return nil, errors.New(message)
+	}
+	return reply, nil
 }
 
 func (n *Node) fixFingers() {
@@ -211,22 +212,18 @@ func (n *Node) closestPrecedingNodes(id int) []NodeAddress {
 
 func (n *Node) stabilize() {
 	for _, succ := range n.Successors {
-		successorList, err := callGetSuccessorList(succ)
+		successorList, predecessor, err := callGetSuccsAndPred(succ)
 		if err != nil {
-			continue
-		}
-		predecessor, err := callGetPredecessor(succ)
-		if err != nil {
+			log.Printf("failed to get successors and predecessor: %+v\n", err)
 			continue
 		}
 
 		newSuccessors := []NodeAddress{}
-
-		predecessorArcLength := CounterClockwiseDistance(predecessor.Id, n.Id, n.M)
-		succArcLength := CounterClockwiseDistance(succ.Id, n.Id, n.M)
+		predecessorDist := CounterClockwiseDistance(predecessor.Id, n.Id, n.M)
+		successorDist := CounterClockwiseDistance(succ.Id, n.Id, n.M)
 
 		if predecessorNotNil(*predecessor) {
-			if predecessorArcLength != 0 && predecessorArcLength < succArcLength { // is predecessor between n and succ?
+			if predecessorDist != 0 && predecessorDist < successorDist { // is predecessor between n and succ?
 				newSuccessors = append(newSuccessors, *predecessor)
 			} else if succ.Id == n.Id { // needed if n has itself as successor, otherwise will never update predecessor
 				newSuccessors = append(newSuccessors, *predecessor)
@@ -236,6 +233,7 @@ func (n *Node) stabilize() {
 		successors := *successorList
 		newSuccessors = append(newSuccessors, succ)
 		newSuccessors = append(newSuccessors, successors[:len(successors)-len(newSuccessors)]...)
+
 		n.Lock()
 		n.Successors = newSuccessors
 		address := n.createAddress()
@@ -255,13 +253,6 @@ func (n *Node) checkPredecessor() {
 	n.Unlock()
 }
 
-func (n *Node) shouldChangePredecessor(potentialPredecessor NodeAddress) bool {
-	if predecessorIsNil(n.Predecessor) {
-		return true
-	}
-	return IsNewCloserPredecessor(n.Id, n.Predecessor.Id, potentialPredecessor.Id, n.M)
-}
-
 func callFindSuccessor(node NodeAddress, id *int) (*NodeAddress, error) {
 	nodeAdressReply := new(NodeAddress)
 	ok := Call("Node.FindSuccessor", node.IP, node.Port, id, nodeAdressReply)
@@ -271,22 +262,13 @@ func callFindSuccessor(node NodeAddress, id *int) (*NodeAddress, error) {
 	return nodeAdressReply, nil
 }
 
-func callGetSuccessorList(node NodeAddress) (*[]NodeAddress, error) {
-	successorsReply := new([]NodeAddress)
-	ok := Call("Node.GetSuccessorList", node.IP, node.Port, new(struct{}), successorsReply)
+func callGetSuccsAndPred(node NodeAddress) (*[]NodeAddress, *NodeAddress, error) {
+	reply := new(SuccsAndPredReply)
+	ok := Call("Node.GetSuccsAndPred", node.IP, node.Port, new(struct{}), reply)
 	if !ok {
-		return nil, errors.New("failed to call GetSuccessorList")
+		return nil, nil, errors.New("failed to call GetSuccsAndPred for node " + strconv.Itoa(node.Id))
 	}
-	return successorsReply, nil
-}
-
-func callGetPredecessor(node NodeAddress) (*NodeAddress, error) {
-	predecessorReply := new(NodeAddress)
-	ok := Call("Node.GetPredecessor", node.IP, node.Port, new(struct{}), predecessorReply)
-	if !ok {
-		return nil, errors.New("failed to call GetPredecessor")
-	}
-	return predecessorReply, nil
+	return reply.Successors, reply.Predecessor, nil
 }
 
 func callHealthCheck(node NodeAddress) bool {
