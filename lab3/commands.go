@@ -42,8 +42,8 @@ func (n *Node) LookUpCmd(filename string) {
 		fmt.Printf("Could not look up file. Failed to reach node %d", node.Id)
 		return
 	}
-	if reply.Message != "" {
-		fmt.Printf("Error: %s\n", reply.Message)
+	if reply.ErrorMessage != "" {
+		fmt.Printf("Error: %s\n", reply.ErrorMessage)
 		return
 	}
 	fmt.Printf("File '%s' is stored at node:\n \tid=%d\n\tip=%s\n\tport=%s\n", filename, node.Id, node.IP, node.Port)

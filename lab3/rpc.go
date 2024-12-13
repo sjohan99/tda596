@@ -16,13 +16,13 @@ type StoreFileArgs struct {
 }
 
 type GetFileReply struct {
-	Data    []byte
-	Message string
+	Data         []byte
+	ErrorMessage string
 }
 
 type SuccsAndPredReply struct {
-	Successors  *[]NodeAddress
-	Predecessor *NodeAddress
+	Successors  []NodeAddress
+	Predecessor NodeAddress
 }
 
 func (n *Node) StartServer(ip string, port string, ctx *context.Context) {

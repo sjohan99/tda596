@@ -91,8 +91,8 @@ func (n *Node) HealthCheck(_ *struct{}, _ *struct{}) error {
 func (n *Node) GetSuccsAndPred(_ *struct{}, reply *SuccsAndPredReply) error {
 	n.Lock()
 	defer n.Unlock()
-	reply.Successors = &n.Successors
-	reply.Predecessor = &n.Predecessor
+	reply.Successors = n.Successors
+	reply.Predecessor = n.Predecessor
 	return nil
 }
 
@@ -149,7 +149,7 @@ func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
 
 func (n *Node) GetFile(filename *string, reply *GetFileReply) error {
 	if !slices.Contains(n.Files, *filename) {
-		reply.Message = "File does not exist in Chord ring"
+		reply.ErrorMessage = "File does not exist in Chord ring"
 		return nil
 	}
 	path := makeFilePath(*filename, n.Id)
@@ -268,7 +268,7 @@ func callGetSuccsAndPred(node NodeAddress) (*[]NodeAddress, *NodeAddress, error)
 	if !ok {
 		return nil, nil, errors.New("failed to call GetSuccsAndPred for node " + strconv.Itoa(node.Id))
 	}
-	return reply.Successors, reply.Predecessor, nil
+	return &reply.Successors, &reply.Predecessor, nil
 }
 
 func callHealthCheck(node NodeAddress) bool {
