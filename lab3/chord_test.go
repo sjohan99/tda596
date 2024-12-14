@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestChordOneNode(t *testing.T) {
-	config := makeConfig(5, 5000)
+	config := makeConfig(5, 8000)
 	config.M = 4
 	node := c.CreateNode(config)
 	node.Start(config, &backgroundCtx)
@@ -101,8 +101,8 @@ func TestChordOneNode(t *testing.T) {
 }
 
 func TestChordTwoNodes(t *testing.T) {
-	config1 := makeConfig(41, 5001)
-	config2 := makeJoinConfig(5, 5002, config1)
+	config1 := makeConfig(41, 8001)
+	config2 := makeJoinConfig(5, 8002, config1)
 
 	node1 := c.CreateNode(config1)
 	node1.Start(config1, &backgroundCtx)
@@ -124,10 +124,10 @@ func TestChordTwoNodes(t *testing.T) {
 }
 
 func TestChordFourNodes(t *testing.T) {
-	config1 := makeConfig(41, 5003)
-	config2 := makeJoinConfig(21, 5004, config1)
-	config3 := makeJoinConfig(40, 5005, config2)
-	config4 := makeJoinConfig(56, 5006, config3)
+	config1 := makeConfig(41, 8003)
+	config2 := makeJoinConfig(21, 8004, config1)
+	config3 := makeJoinConfig(40, 8005, config2)
+	config4 := makeJoinConfig(56, 8006, config3)
 
 	node1 := c.CreateNode(config1)
 	node1.Start(config1, &backgroundCtx)
@@ -164,9 +164,9 @@ func TestChordFourNodes(t *testing.T) {
 }
 
 func TestChordFourNodesWithOneNodeFailing(t *testing.T) {
-	config1 := makeConfig(41, 5007)
-	config2 := makeJoinConfig(21, 5008, config1)
-	config3 := makeJoinConfig(40, 5009, config2)
+	config1 := makeConfig(41, 8007)
+	config2 := makeJoinConfig(21, 8008, config1)
+	config3 := makeJoinConfig(40, 8009, config2)
 	config4 := makeJoinConfig(56, 5010, config3)
 
 	ctx, cancel := context.WithCancel(context.Background())
