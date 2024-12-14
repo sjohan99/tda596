@@ -56,6 +56,7 @@ func main() {
 		n = *JoinNode(config)
 	}
 	n.Start(config, nil)
+
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		command, filepath, err := parseCommand(reader)

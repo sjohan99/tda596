@@ -27,7 +27,10 @@ type SuccsAndPredReply struct {
 
 func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 	server := rpc.NewServer()
-	server.Register(n)
+	err := server.Register(n)
+	if err != nil {
+		log.Fatal("RPC failed to register node:", err)
+	}
 	server.HandleHTTP(chordPath+port, "/chord/debug"+port)
 	l, err := net.Listen("tcp", ip+":"+port)
 	if err != nil {
@@ -35,7 +38,7 @@ func (n *Node) StartServer(ip string, port string, ctx *context.Context) {
 	}
 	go func() {
 		<-(*ctx).Done()
-		log.Printf("Shutting down server")
+		log.Println("Shutting down server")
 		l.Close()
 	}()
 	go http.Serve(l, nil)

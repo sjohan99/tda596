@@ -28,7 +28,7 @@ type Node struct {
 	Predecessor     NodeAddress           // the node's predecessor
 	IP              string                // the node's IP address
 	Port            string                // the node's port
-	M               int                   // the ring size = 2^m
+	M               int                   // the ring size = 2^M
 	CalculateIdFunc func([]byte, int) int // function to calculate the ID from its hash
 	Files           []string              // the files stored at the node
 }

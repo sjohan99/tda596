@@ -22,9 +22,9 @@ func makeConfig(id int, port int) a.Config {
 	return a.Config{
 		Address:                  "localhost",
 		Port:                     strconv.Itoa(port),
-		StabilizeInterval:        127,
-		FixFingersInterval:       151,
-		CheckPredecessorInterval: 167,
+		StabilizeInterval:        433,
+		FixFingersInterval:       223,
+		CheckPredecessorInterval: 449,
 		Successors:               4,
 		CalculateIdFunc:          calcFunc,
 		M:                        6,

@@ -19,6 +19,8 @@ const (
 	JOIN
 )
 
+var requiredArgs = []string{"a", "p", "ts", "tff", "tcp", "r"}
+
 type Config struct {
 	Address                  string                // a | The IP address that the Chord client will bind to, as well as advertise to other nodes.
 	Port                     string                // p | The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.
@@ -35,7 +37,47 @@ type Config struct {
 	CalculateIdFunc          func([]byte, int) int // Function to calculate the ID of a node.
 }
 
-var requiredArgs = []string{"a", "p", "ts", "tff", "tcp", "r"}
+func ParseArguments() Config {
+	aFlag := flag.String("a", "", "The IP address that the Chord client will bind to, as well as advertise to other nodes. Represented as an ASCII string (e.g., 128.8.126.63). Must be specified.")
+	pFlag := flag.Int("p", 0, "The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.")
+	jaFlag := flag.String("ja", "", "The IP address of the machine running a Chord node. The Chord client will join this node's ring. Represented as an ASCII string (e.g., 128.8.126.63). Must be specified if --jp is specified.")
+	jpFlag := flag.Int("jp", 0, "The port that an existing Chord node is bound to and listening on. The Chord client will join this node's ring. Represented as a base-10 integer. Must be specified if --ja is specified.")
+	tsFlag := flag.Int("ts", 0, "The time in milliseconds between invocations of 'stabilize'. Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
+	tffFlag := flag.Int("tff", 0, "The time in milliseconds between invocations of 'fix fingers'. Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
+	tcpFlag := flag.Int("tcp", 0, "The time in milliseconds between invocations of 'check predecessor'.Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
+	rFlag := flag.Int("r", 0, "The number of successors maintained by the Chord client. Represented as a base-10 integer. Must be specified, with a value in the range of [1,32].")
+	iFlag := flag.String("i", "", "The identifier (ID) assigned to the Chord client which will override the ID computed by the SHA1 sum of the client's IP address and port number. Represented as a string of 40 characters matching [0-9a-fA-F]. Optional parameter.")
+	mFlag := flag.Int("m", 0, "The size of the ring. Calculated as 2^m. Represented as a base-10 integer. Optinal parameter.")
+	flag.Parse()
+
+	initialization := verifyFlagPrecenses()
+	withinBounds("ts", *tsFlag, 1, 60000)
+	withinBounds("tff", *tffFlag, 1, 60000)
+	withinBounds("tcp", *tcpFlag, 1, 60000)
+	withinBounds("r", *rFlag, 1, 32)
+	id := verifyOrCreateId(iFlag, aFlag, pFlag)
+	joinId := createIdHash(jaFlag, jpFlag)
+	if *mFlag == 0 {
+		*mFlag = 6
+	}
+
+	config := Config{
+		Address:                  *aFlag,
+		Port:                     strconv.Itoa(*pFlag),
+		JoinAddress:              *jaFlag,
+		JoinPort:                 strconv.Itoa(*jpFlag),
+		JoinId:                   joinId,
+		StabilizeInterval:        time.Duration(*tsFlag) * time.Millisecond,
+		FixFingersInterval:       time.Duration(*tffFlag) * time.Millisecond,
+		CheckPredecessorInterval: time.Duration(*tcpFlag) * time.Millisecond,
+		Successors:               *rFlag,
+		Id:                       id,
+		Initialization:           initialization,
+		CalculateIdFunc:          getIdFromHash,
+		M:                        *mFlag,
+	}
+	return config
+}
 
 func verifyFlagPrecenses() Initialization {
 	jaFlagPresent := false
@@ -110,46 +152,4 @@ func getIdFromHash(hash []byte, m int) int {
 	n := new(big.Int).SetBytes(hash)
 	res := int(n.Mod(n, big.NewInt(1<<m)).Int64())
 	return res
-}
-
-func ParseArguments() Config {
-	aFlag := flag.String("a", "", "The IP address that the Chord client will bind to, as well as advertise to other nodes. Represented as an ASCII string (e.g., 128.8.126.63). Must be specified.")
-	pFlag := flag.Int("p", 0, "The port that the Chord client will bind to and listen on. Represented as a base-10 integer. Must be specified.")
-	jaFlag := flag.String("ja", "", "The IP address of the machine running a Chord node. The Chord client will join this node's ring. Represented as an ASCII string (e.g., 128.8.126.63). Must be specified if --jp is specified.")
-	jpFlag := flag.Int("jp", 0, "The port that an existing Chord node is bound to and listening on. The Chord client will join this node's ring. Represented as a base-10 integer. Must be specified if --ja is specified.")
-	tsFlag := flag.Int("ts", 0, "The time in milliseconds between invocations of 'stabilize'. Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
-	tffFlag := flag.Int("tff", 0, "The time in milliseconds between invocations of 'fix fingers'. Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
-	tcpFlag := flag.Int("tcp", 0, "The time in milliseconds between invocations of 'check predecessor'.Represented as a base-10 integer. Must be specified, with a value in the range of [1,60000].")
-	rFlag := flag.Int("r", 0, "The number of successors maintained by the Chord client. Represented as a base-10 integer. Must be specified, with a value in the range of [1,32].")
-	iFlag := flag.String("i", "", "The identifier (ID) assigned to the Chord client which will override the ID computed by the SHA1 sum of the client's IP address and port number. Represented as a string of 40 characters matching [0-9a-fA-F]. Optional parameter.")
-	mFlag := flag.Int("m", 0, "The size of the ring. Calculated as 2^m. Represented as a base-10 integer. Optinal parameter.")
-	flag.Parse()
-
-	initialization := verifyFlagPrecenses()
-	withinBounds("ts", *tsFlag, 1, 60000)
-	withinBounds("tff", *tffFlag, 1, 60000)
-	withinBounds("tcp", *tcpFlag, 1, 60000)
-	withinBounds("r", *rFlag, 1, 32)
-	id := verifyOrCreateId(iFlag, aFlag, pFlag)
-	joinId := createIdHash(jaFlag, jpFlag)
-	if *mFlag == 0 {
-		*mFlag = 6
-	}
-
-	config := Config{
-		Address:                  *aFlag,
-		Port:                     strconv.Itoa(*pFlag),
-		JoinAddress:              *jaFlag,
-		JoinPort:                 strconv.Itoa(*jpFlag),
-		JoinId:                   joinId,
-		StabilizeInterval:        time.Duration(*tsFlag) * time.Millisecond,
-		FixFingersInterval:       time.Duration(*tffFlag) * time.Millisecond,
-		CheckPredecessorInterval: time.Duration(*tcpFlag) * time.Millisecond,
-		Successors:               *rFlag,
-		Id:                       id,
-		Initialization:           initialization,
-		CalculateIdFunc:          getIdFromHash,
-		M:                        *mFlag,
-	}
-	return config
 }
