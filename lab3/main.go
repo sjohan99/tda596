@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const helpMessage = "Commands:\n\t-lookup <filename>\n\t-storefile <filename>\n\t-printstate\n\t-exit\n"
+const helpMessage = "Commands:\n\tlookup <filename>\n\tstorefile <filename>\n\tprintstate\n\texit\n"
 
 type logWriter struct{}
 
