@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -17,6 +16,11 @@ type NodeAddress struct {
 	IP   string
 	Port string
 	Id   int
+}
+
+type File struct {
+	Name string
+	Data string
 }
 
 type Node struct {
@@ -30,7 +34,7 @@ type Node struct {
 	Port            string                // the node's port
 	M               int                   // the ring size = 2^M
 	CalculateIdFunc func([]byte, int) int // function to calculate the ID from its hash
-	Files           []string              // the files stored at the node
+	Files           map[int]File          // the files stored at the node
 }
 
 func CreateNode(c argparser.Config) *Node {
@@ -44,6 +48,7 @@ func CreateNode(c argparser.Config) *Node {
 		Port:            c.Port,
 		M:               c.M,
 		CalculateIdFunc: c.CalculateIdFunc,
+		Files:           make(map[int]File),
 	}
 
 	addr := node.createAddress()
@@ -135,34 +140,25 @@ func (n *Node) FindSuccessor(id *int, reply *NodeAddress) error {
 }
 
 func (n *Node) StoreFile(args *StoreFileArgs, reply *struct{}) error {
-	path := makeFilePath(args.Filename, n.Id)
-	err := os.WriteFile(path, args.Data, os.ModePerm)
-	if err != nil {
-		log.Printf("failed to write to file: %+v\n", err)
-		return err
-	}
 	n.Lock()
-	n.Files = append(n.Files, args.Filename)
+	n.Files[args.Id] = File{Name: args.Name, Data: args.Data}
 	n.Unlock()
 	return nil
 }
 
-func (n *Node) GetFile(filename *string, reply *GetFileReply) error {
-	if !slices.Contains(n.Files, *filename) {
-		reply.ErrorMessage = "File does not exist in Chord ring"
+func (n *Node) GetFile(fileId *int, reply *GetFileReply) error {
+	n.Lock()
+	file, ok := n.Files[*fileId]
+	n.Unlock()
+	if !ok {
+		reply.ErrorMessage = "File does not exist in Chord ring."
 		return nil
 	}
-	path := makeFilePath(*filename, n.Id)
-	replyData, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("failed to read file: %s. error: %s\n", *filename, err)
-		return err
-	}
-	reply.Data = replyData
+	reply.Data = file.Data
 	return nil
 }
 
-func (n *Node) LookUp(filename string) (*NodeAddress, error) {
+func (n *Node) LookUp(filename string) (*NodeAddress, int, error) {
 	hasher := sha1.New()
 	hasher.Write([]byte(filename))
 	hash := hasher.Sum(nil)
@@ -171,9 +167,9 @@ func (n *Node) LookUp(filename string) (*NodeAddress, error) {
 	err := n.FindSuccessor(&id, reply)
 	if err != nil {
 		message := fmt.Sprintf("Could not find any node for file '%s' with id=%d\n", filename, id)
-		return nil, errors.New(message)
+		return nil, -1, errors.New(message)
 	}
-	return reply, nil
+	return reply, id, nil
 }
 
 func (n *Node) fixFingers() {
@@ -283,6 +279,6 @@ func callStoreFile(node NodeAddress, args *StoreFileArgs) bool {
 	return Call("Node.StoreFile", node.IP, node.Port, args, new(struct{}))
 }
 
-func callGetFile(node NodeAddress, filename *string, reply *GetFileReply) bool {
-	return Call("Node.GetFile", node.IP, node.Port, filename, reply)
+func callGetFile(node NodeAddress, fileId *int, reply *GetFileReply) bool {
+	return Call("Node.GetFile", node.IP, node.Port, fileId, reply)
 }

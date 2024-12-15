@@ -26,18 +26,18 @@ func (n *Node) PrintStateCmd() {
 
 	fmt.Println("Files:")
 	for _, filename := range nCopy.Files {
-		fmt.Printf("\t%s\n", filename)
+		fmt.Printf("\t%s\n", filename.Name)
 	}
 }
 
 func (n *Node) LookUpCmd(filename string) {
-	node, err := n.LookUp(filename)
+	node, fileId, err := n.LookUp(filename)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 	reply := new(GetFileReply)
-	ok := callGetFile(*node, &filename, reply)
+	ok := callGetFile(*node, &fileId, reply)
 	if !ok {
 		fmt.Printf("Could not look up file. Failed to reach node %d", node.Id)
 		return
@@ -47,11 +47,11 @@ func (n *Node) LookUpCmd(filename string) {
 		return
 	}
 	fmt.Printf("File '%s' is stored at node:\n \tid=%d\n\tip=%s\n\tport=%s\n", filename, node.Id, node.IP, node.Port)
-	fmt.Printf("File contents: \n%s\n", string(reply.Data))
+	fmt.Printf("File contents: \n%s\n", reply.Data)
 }
 
 func (n *Node) StoreFileCmd(filename string) {
-	targetNode, err := n.LookUp(filename)
+	targetNode, fileId, err := n.LookUp(filename)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -62,8 +62,9 @@ func (n *Node) StoreFileCmd(filename string) {
 		return
 	}
 	args := StoreFileArgs{
-		Filename: filename,
-		Data:     data,
+		Id:   fileId,
+		Name: filename,
+		Data: string(data),
 	}
 	ok := callStoreFile(*targetNode, &args)
 	if !ok {

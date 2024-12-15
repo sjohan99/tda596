@@ -11,12 +11,13 @@ import (
 const chordPath = "/_chord_"
 
 type StoreFileArgs struct {
-	Filename string
-	Data     []byte
+	Id   int
+	Name string
+	Data string
 }
 
 type GetFileReply struct {
-	Data         []byte
+	Data         string
 	ErrorMessage string
 }
 
