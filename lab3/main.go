@@ -76,7 +76,7 @@ func main() {
 		case "exit":
 			return
 		default:
-			fmt.Print(helpMessage)
+			fmt.Println("Unknown command, use -help for help")
 		}
 	}
 }
