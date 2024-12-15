@@ -5,6 +5,7 @@ import (
 	a "chord/argparser"
 	"context"
 	"log"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -167,7 +168,7 @@ func TestChordFourNodesWithOneNodeFailing(t *testing.T) {
 	config1 := makeConfig(41, 8007)
 	config2 := makeJoinConfig(21, 8008, config1)
 	config3 := makeJoinConfig(40, 8009, config2)
-	config4 := makeJoinConfig(56, 5010, config3)
+	config4 := makeJoinConfig(56, 8010, config3)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -202,4 +203,37 @@ func TestChordFourNodesWithOneNodeFailing(t *testing.T) {
 	expectPredecessor(56, &node2State, t)
 	expectPredecessor(21, &node3State, t)
 	expectPredecessor(40, &node4State, t)
+}
+
+func TestChordOneNodeUploadFile(t *testing.T) {
+	config := makeConfig(5, 8011)
+	config.M = 4
+	node := c.CreateNode(config)
+	node.Start(config, &backgroundCtx)
+
+	time.Sleep(3 * time.Second)
+
+	f, _ := os.CreateTemp("", "onenodefile.txt")
+	defer os.Remove(f.Name())
+	f.WriteString("content")
+	node.StoreFileCmd(f.Name())
+
+	time.Sleep(1 * time.Second)
+
+	owner, fileId, err := node.LookUp(f.Name())
+	if err != nil {
+		t.Errorf("Failed to look up file: %v", err)
+	}
+	if owner.Id != 5 {
+		t.Errorf("Expected owner to be node 5, got %d", owner.Id)
+	}
+
+	nodeState := node.GetState()
+	file, ok := nodeState.Files[fileId]
+	if !ok {
+		t.Errorf("Expected file to be stored in node 5, but it was not found")
+	}
+	if file.Data != "content" {
+		t.Errorf("Expected file data to be 'content', got %s", file.Data)
+	}
 }

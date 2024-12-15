@@ -44,3 +44,15 @@ Commands:
         printstate
         exit
 ```
+
+## Testing
+
+The are a few (inexhaustive) basic integration tests for Chord which can be found in the `chord_test.go` file.
+They test that the ring is reaches the correct state for 1, 2, and 4 nodes. As well as the case where one of the nodes leaves the ring.
+There is one simple test for uploading a file to the ring.
+
+To run the tests:
+
+```
+go test
+```
