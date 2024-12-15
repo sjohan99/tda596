@@ -4,9 +4,6 @@ import (
 	"context"
 	"log"
 	"math"
-	"os"
-	"path"
-	"strconv"
 	"time"
 )
 
@@ -20,15 +17,6 @@ func predecessorNotNil(predecessor NodeAddress) bool {
 
 func predecessorIsNil(predecessor NodeAddress) bool {
 	return predecessor == NodeAddress{}
-}
-
-func makeFilePath(filename string, id int) string {
-	prefix := strconv.Itoa(id)
-	filepath := path.Join("data", prefix, filename)
-	if err := os.MkdirAll(path.Dir(filepath), os.ModePerm); err != nil {
-		log.Fatalf("failed to create directory: %v", err)
-	}
-	return filepath
 }
 
 func fillReply(reply *NodeAddress, node NodeAddress) {
