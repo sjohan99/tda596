@@ -103,9 +103,14 @@ func (n *Node) GetSuccsAndPred(_ *struct{}, reply *SuccsAndPredReply) error {
 
 func (n *Node) Notify(potentialPredecessor *NodeAddress, _ *struct{}) error {
 	n.Lock()
-	defer n.Unlock()
+	changed := false
 	if n.shouldChangePredecessor(*potentialPredecessor) {
 		n.Predecessor = *potentialPredecessor
+		changed = true
+	}
+	n.Unlock()
+	if changed {
+		n.migrateFilesTo(*potentialPredecessor)
 	}
 	return nil
 }
@@ -247,6 +252,25 @@ func (n *Node) checkPredecessor() {
 		n.Predecessor = NodeAddress{}
 	}
 	n.Unlock()
+}
+
+// Migrate files which (if any) should belong to the new predecessor instead.
+func (n *Node) migrateFilesTo(target NodeAddress) {
+	filesToMigrate := make(map[int]File)
+	n.Lock()
+	for fileId, file := range n.Files {
+		myDistance := CounterClockwiseDistance(n.Id, fileId, n.M)
+		targetDistance := CounterClockwiseDistance(target.Id, fileId, n.M)
+		if myDistance > targetDistance { // true -> target is new successor of file
+			filesToMigrate[fileId] = file
+			delete(n.Files, fileId)
+		}
+	}
+	n.Unlock()
+	for id, file := range filesToMigrate {
+		args := StoreFileArgs{Id: id, Name: file.Name, Data: file.Data}
+		callStoreFile(target, &args)
+	}
 }
 
 func callFindSuccessor(node NodeAddress, id *int) (*NodeAddress, error) {

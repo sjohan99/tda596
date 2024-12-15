@@ -25,8 +25,8 @@ func (n *Node) PrintStateCmd() {
 	}
 
 	fmt.Println("Files:")
-	for _, filename := range nCopy.Files {
-		fmt.Printf("\t%s\n", filename.Name)
+	for id, file := range nCopy.Files {
+		fmt.Printf("\t%s (id=%d)\n", file.Name, id)
 	}
 }
 
