@@ -50,6 +50,7 @@ func Call(rpcname, ip, port string, args interface{}, reply interface{}) bool {
 	if err != nil {
 		return false
 	}
+	defer client.Close()
 	call := client.Go(rpcname, args, reply, nil)
 	res := <-call.Done
 	if res.Error != nil {
